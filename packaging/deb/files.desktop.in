@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=Files
+Exec=/usr/share/APPLaunch/bin/M5CardputerZero-Files
+Terminal=false
+Icon=share/images/files.png
+Type=Application

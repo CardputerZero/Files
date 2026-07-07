@@ -1,0 +1,240 @@
+{
+    "targets": [
+        {
+            "name": "font_noto_sans_mono_semibold_12",
+            "source": "NotoSansMono-SemiBold.ttf",
+            "args": [
+                "--no-compress",
+                "--no-prefilter",
+                "--force-fast-kern-format"
+            ],
+            "size": 12,
+            "bpp": 4,
+            "ranges": [
+                "0x20-0x7E",
+                "0xA0-0xFF",
+                "0x2190-0x21FF"
+            ],
+            "symbols": [
+                "–—‘’“”…•·"
+            ]
+        },
+        {
+            "name": "font_noto_sans_mono_semibold_14",
+            "source": "NotoSansMono-SemiBold.ttf",
+            "args": [
+                "--no-compress",
+                "--no-prefilter",
+                "--force-fast-kern-format"
+            ],
+            "size": 14,
+            "bpp": 4,
+            "ranges": [
+                "0x20-0x7E",
+                "0xA0-0xFF",
+                "0x2190-0x21FF"
+            ],
+            "symbols": [
+                "–—‘’“”…•·"
+            ]
+        },
+        {
+            "name": "font_noto_sans_sc_semibold_10",
+            "source": "NotoSansSC-SemiBold.ttf",
+            "args": [
+                "--no-compress",
+                "--no-prefilter",
+                "--force-fast-kern-format"
+            ],
+            "size": 10,
+            "bpp": 4,
+            "ranges": [
+                "0x20-0x7E",
+                "0xA0-0xFF",
+                "0x2190-0x21FF",
+                "0x3000-0x303F",
+                "0xFF01-0xFF5E"
+            ],
+            "symbols": [
+                "–—‘’“”…•·"
+            ],
+            "encoded_ranges": [
+                {
+                    "encoding": "gb2312",
+                    "rows": [
+                        [
+                            16,
+                            55
+                        ]
+                    ]
+                }
+            ]
+        },
+        {
+            "name": "font_noto_sans_sc_semibold_12",
+            "source": "NotoSansSC-SemiBold.ttf",
+            "args": [
+                "--no-compress",
+                "--no-prefilter",
+                "--force-fast-kern-format"
+            ],
+            "size": 12,
+            "bpp": 4,
+            "ranges": [
+                "0x20-0x7E",
+                "0xA0-0xFF",
+                "0x2190-0x21FF",
+                "0x3000-0x303F",
+                "0xFF01-0xFF5E"
+            ],
+            "symbols": [
+                "–—‘’“”…•·"
+            ],
+            "encoded_ranges": [
+                {
+                    "encoding": "gb2312",
+                    "rows": [
+                        [
+                            16,
+                            55
+                        ]
+                    ]
+                }
+            ]
+        },
+        {
+            "name": "font_noto_sans_sc_semibold_14",
+            "source": "NotoSansSC-SemiBold.ttf",
+            "args": [
+                "--no-compress",
+                "--no-prefilter",
+                "--force-fast-kern-format"
+            ],
+            "size": 14,
+            "bpp": 4,
+            "ranges": [
+                "0x20-0x7E",
+                "0xA0-0xFF",
+                "0x2190-0x21FF",
+                "0x3000-0x303F",
+                "0xFF01-0xFF5E"
+            ],
+            "symbols": [
+                "–—‘’“”…•·"
+            ],
+            "encoded_ranges": [
+                {
+                    "encoding": "gb2312",
+                    "rows": [
+                        [
+                            16,
+                            55
+                        ]
+                    ]
+                }
+            ]
+        },
+        {
+            "name": "font_noto_sans_jp_semibold_10",
+            "source": "NotoSansJP-SemiBold.ttf",
+            "args": [
+                "--no-compress",
+                "--no-prefilter",
+                "--force-fast-kern-format"
+            ],
+            "size": 10,
+            "bpp": 4,
+            "ranges": [
+                "0x20-0x7E",
+                "0xA0-0xFF",
+                "0x2190-0x21FF",
+                "0x3040-0x309F",
+                "0x30A0-0x30FF",
+                "0x31F0-0x31FF",
+                "0x3000-0x303F"
+            ],
+            "symbols": [
+                "–—‘’“”…•·"
+            ],
+            "encoded_ranges": [
+                {
+                    "encoding": "euc_jp",
+                    "rows": [
+                        [
+                            16,
+                            47
+                        ]
+                    ]
+                }
+            ]
+        },
+        {
+            "name": "font_noto_sans_jp_semibold_12",
+            "source": "NotoSansJP-SemiBold.ttf",
+            "args": [
+                "--no-compress",
+                "--no-prefilter",
+                "--force-fast-kern-format"
+            ],
+            "size": 12,
+            "bpp": 4,
+            "ranges": [
+                "0x20-0x7E",
+                "0xA0-0xFF",
+                "0x2190-0x21FF",
+                "0x3040-0x309F",
+                "0x30A0-0x30FF",
+                "0x31F0-0x31FF",
+                "0x3000-0x303F"
+            ],
+            "symbols": [
+                "–—‘’“”…•·"
+            ],
+            "encoded_ranges": [
+                {
+                    "encoding": "euc_jp",
+                    "rows": [
+                        [
+                            16,
+                            47
+                        ]
+                    ]
+                }
+            ]
+        },
+        {
+            "name": "font_noto_sans_jp_semibold_14",
+            "source": "NotoSansJP-SemiBold.ttf",
+            "args": [
+                "--no-compress",
+                "--no-prefilter",
+                "--force-fast-kern-format"
+            ],
+            "size": 14,
+            "bpp": 4,
+            "ranges": [
+                "0x20-0x7E",
+                "0xA0-0xFF",
+                "0x2190-0x21FF",
+                "0x3040-0x309F",
+                "0x30A0-0x30FF",
+                "0x31F0-0x31FF",
+                "0x3000-0x303F"
+            ],
+            "symbols": [
+                "–—‘’“”…•·"
+            ],
+            "encoded_ranges": [
+                {
+                    "encoding": "euc_jp",
+                    "rows": [
+                        [
+                            16,
+                            47
+                        ]
+                    ]
+                }
+            ]
+        }
+    ]
+}
