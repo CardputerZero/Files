@@ -276,7 +276,8 @@ void BrowserViewModel::showInfoSelected()
         return;
     }
 
-    if (_model.preview().openInfo(*selected)) {
+    const FileEntry detailed = _model.browser().entryWithMetadata(*selected);
+    if (_model.preview().openInfo(detailed)) {
         _router.push(PageId::Preview);
     }
 }

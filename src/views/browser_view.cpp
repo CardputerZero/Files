@@ -14,26 +14,29 @@
 namespace files {
 namespace {
 
-constexpr int32_t kScreenWidth              = 320;
-constexpr int32_t kScreenHeight             = 170;
-constexpr int32_t kPathBarHeight            = 21;
-constexpr int32_t kPathTextX                = 10;
-constexpr int32_t kPathTextWidth            = 300;
-constexpr int32_t kListX                    = 0;
-constexpr int32_t kListY                    = 29;
-constexpr int32_t kListWidth                = 320;
-constexpr int32_t kListHeight               = 132;
-constexpr int32_t kIconX                    = 10;
-constexpr int32_t kTextX                    = 38;
-constexpr int32_t kCursorSize               = 25;
-constexpr int32_t kCursorPaddingX           = 9;
-constexpr int32_t kCursorOffsetY            = 2;
-constexpr int32_t kMenuItemHeight           = 20;
-constexpr int32_t kMenuItemPitch            = 27;
-constexpr int32_t kMenuItemMinWidth         = 72;
-constexpr int32_t kMenuItemMaxWidth         = 280;
-constexpr int32_t kMenuPaddingRight         = 11;
-constexpr int32_t kMenuCameraPaddingY       = 10;
+constexpr int32_t kScreenWidth        = 320;
+constexpr int32_t kScreenHeight       = 170;
+constexpr int32_t kPathBarHeight      = 21;
+constexpr int32_t kPathTextX          = 10;
+constexpr int32_t kPathTextWidth      = 300;
+constexpr int32_t kListX              = 0;
+constexpr int32_t kListY              = 29;
+constexpr int32_t kListWidth          = 320;
+constexpr int32_t kListHeight         = 132;
+constexpr int32_t kIconX              = 10;
+constexpr int32_t kTextX              = 38;
+constexpr int32_t kCursorSize         = 25;
+constexpr int32_t kCursorPaddingX     = 9;
+constexpr int32_t kCursorOffsetY      = 2;
+constexpr int32_t kMenuItemHeight     = 20;
+constexpr int32_t kMenuItemPitch      = 27;
+constexpr int32_t kMenuItemMinWidth   = 72;
+constexpr int32_t kMenuItemMaxWidth   = 280;
+constexpr int32_t kMenuPaddingRight   = 11;
+constexpr int32_t kMenuCameraPaddingY = 10;
+constexpr int32_t kFileRowOverscan    = 2;
+constexpr size_t kFileRowPoolSize =
+    static_cast<size_t>((kListHeight + kMenuItemPitch - 1) / kMenuItemPitch + kFileRowOverscan * 2 + 1);
 constexpr int32_t kActionMenuY              = 56;
 constexpr int32_t kActionMenuHiddenY        = 171;
 constexpr int32_t kActionMenuHeight         = kScreenHeight - kActionMenuY;
@@ -217,12 +220,16 @@ public:
         setCameraSize(kListWidth, kListHeight);
     }
 
-    void setEntries(std::vector<FileEntry> entries, int selectedIndex)
+    void setEntries(const std::vector<FileEntry>& entries, int selectedIndex)
     {
-        _rows.clear();
+        ensureRowPool();
+        for (auto& row : _rows) {
+            row->unbind();
+        }
+
+        _row_data.clear();
         _data.option_list.clear();
         _data.selected_option_index = 0;
-        _selected_index             = selectedIndex;
 
         if (entries.empty()) {
             _empty_label->removeFlag(LV_OBJ_FLAG_HIDDEN);
@@ -233,14 +240,15 @@ public:
 
         _empty_label->addFlag(LV_OBJ_FLAG_HIDDEN);
 
-        _rows.reserve(entries.size());
+        _row_data.reserve(entries.size());
+        _data.option_list.reserve(entries.size());
         for (size_t i = 0; i < entries.size(); ++i) {
             std::string text    = rowText(entries[i]);
             const int32_t width = optionWidth(text);
             addOption({{0.0f, static_cast<float>(static_cast<int32_t>(i) * kMenuItemPitch), static_cast<float>(width),
                         static_cast<float>(kMenuItemHeight)},
                        nullptr});
-            _rows.push_back(std::make_unique<Row>(_panel->raw_ptr(), entries[i], std::move(text), width));
+            _row_data.push_back(RowData{std::move(text), imageForEntry(entries[i]), width});
         }
 
         jumpToInstant(clampIndex(selectedIndex));
@@ -249,7 +257,6 @@ public:
 
     void setSelectedIndex(int index)
     {
-        _selected_index = index;
         if (!_data.option_list.empty()) {
             moveToWithCamera(clampIndex(index));
         }
@@ -296,15 +303,19 @@ public:
     }
 
 private:
+    struct RowData {
+        std::string text;
+        const lv_image_dsc_t* image = nullptr;
+        int32_t width               = 0;
+    };
+
     struct Row {
-        Row(lv_obj_t* parent, const FileEntry& entry, std::string name, int32_t width)
+        explicit Row(lv_obj_t* parent)
             : container(std::make_unique<smooth_ui_toolkit::lvgl_cpp::Container>(parent)),
               icon(std::make_unique<smooth_ui_toolkit::lvgl_cpp::Image>(container->raw_ptr())),
-              label(std::make_unique<smooth_ui_toolkit::lvgl_cpp::Label>(container->raw_ptr())),
-              itemWidth(width),
-              text(std::move(name))
+              label(std::make_unique<smooth_ui_toolkit::lvgl_cpp::Label>(container->raw_ptr()))
         {
-            container->setSize(itemWidth, kMenuItemHeight);
+            container->setSize(kMenuItemMinWidth, kMenuItemHeight);
             container->setBgOpa(LV_OPA_TRANSP);
             container->setBorderWidth(0);
             container->setShadowWidth(0);
@@ -312,20 +323,47 @@ private:
             container->setScrollbarMode(LV_SCROLLBAR_MODE_OFF);
             container->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
 
-            icon->setSrc(imageForEntry(entry));
             icon->setSize(20, 20);
             icon->setPos(kIconX, 0);
 
-            label->setText(text);
             label->setTextFont(uiFont14());
             label->setTextColor(lv_color_hex(kMutedTextColor));
             label->setLongMode(LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
-            label->setSize(itemWidth - kTextX - kMenuPaddingRight, LV_SIZE_CONTENT);
             label->align(LV_ALIGN_LEFT_MID, kTextX, 0);
+            container->addFlag(LV_OBJ_FLAG_HIDDEN);
+        }
+
+        void bind(size_t index, const RowData& data)
+        {
+            if (entryIndex == index) {
+                return;
+            }
+
+            entryIndex = index;
+            itemWidth  = data.width;
+            text       = data.text;
+            icon->setSrc(data.image);
+            label->setText(text);
+            container->setSize(itemWidth, kMenuItemHeight);
+            label->setSize(itemWidth - kTextX - kMenuPaddingRight, LV_SIZE_CONTENT);
+            container->removeFlag(LV_OBJ_FLAG_HIDDEN);
+        }
+
+        void unbind()
+        {
+            if (entryIndex == kUnboundIndex) {
+                return;
+            }
+            entryIndex = kUnboundIndex;
+            container->addFlag(LV_OBJ_FLAG_HIDDEN);
         }
 
         void setSelected(bool selected)
         {
+            if (selected == isSelected) {
+                return;
+            }
+            isSelected = selected;
             label->setTextColor(lv_color_hex(selected ? kTextColor : kMutedTextColor));
         }
 
@@ -334,15 +372,31 @@ private:
         std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Label> label;
         int32_t itemWidth = 0;
         std::string text;
+        size_t entryIndex = kUnboundIndex;
+        bool isSelected   = false;
+
+        static constexpr size_t kUnboundIndex = static_cast<size_t>(-1);
     };
 
     std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Container> _panel;
     std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Label> _empty_label;
     std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Container> _scroll_bar;
     std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Container> _scroll_thumb;
+    std::vector<RowData> _row_data;
     std::vector<std::unique_ptr<Row>> _rows;
-    int _selected_index      = -1;
     bool _pinned_to_selected = false;
+
+    void ensureRowPool()
+    {
+        if (!_rows.empty()) {
+            return;
+        }
+
+        _rows.reserve(kFileRowPoolSize);
+        for (size_t index = 0; index < kFileRowPoolSize; ++index) {
+            _rows.push_back(std::make_unique<Row>(_panel->raw_ptr()));
+        }
+    }
 
     int clampIndex(int index) const
     {
@@ -463,13 +517,23 @@ private:
         const int32_t camera_y_offset = -static_cast<int32_t>(std::round(getCameraOffset().y));
         const int32_t selected_index  = clampIndex(_data.selected_option_index);
 
-        for (size_t i = 0; i < _rows.size() && i < _data.option_list.size(); ++i) {
-            const auto& keyframe = _data.option_list[i].keyframe;
-            auto& row            = *_rows[i];
-            row.container->setSize(row.itemWidth, kMenuItemHeight);
+        const int32_t camera_y = static_cast<int32_t>(std::floor(getCameraOffset().y));
+        const int32_t first    = std::max(0, camera_y / kMenuItemPitch - kFileRowOverscan);
+        const int32_t last =
+            std::min(static_cast<int32_t>(_row_data.size()),
+                     (camera_y + kListHeight + kMenuItemPitch - 1) / kMenuItemPitch + kFileRowOverscan);
+
+        size_t row_slot = 0;
+        for (int32_t index = first; index < last && row_slot < _rows.size(); ++index, ++row_slot) {
+            const auto& keyframe = _data.option_list[static_cast<size_t>(index)].keyframe;
+            auto& row            = *_rows[row_slot];
+            row.bind(static_cast<size_t>(index), _row_data[static_cast<size_t>(index)]);
             row.container->setPos(static_cast<int32_t>(std::round(keyframe.x)) + camera_x_offset,
                                   static_cast<int32_t>(std::round(keyframe.y)) + camera_y_offset);
-            row.setSelected(static_cast<int32_t>(i) == selected_index);
+            row.setSelected(index == selected_index);
+        }
+        for (; row_slot < _rows.size(); ++row_slot) {
+            _rows[row_slot]->unbind();
         }
 
         renderScrollBar();
@@ -1281,17 +1345,6 @@ void BrowserView::onEnter(lv_obj_t* parent)
     _vm.pendingRenameName().observe(this, onPendingRenameNameChanged);
     _magic_serial_seen = _vm.magic().get();
     _vm.magic().observe(this, onMagicChanged);
-
-    renderDirectory(_vm.currentDirectory().get());
-    renderEntries(_vm.entries().get());
-    renderSelectedIndex(_vm.selectedIndex().get());
-    renderStatus(_vm.status().get());
-    renderEnterPressed(_vm.enterPressed().get());
-    renderActionMenuOpen(_vm.actionMenuOpen().get());
-    renderActionMenuSelectedIndex(_vm.actionMenuSelectedIndex().get());
-    renderPendingDelete(_vm.pendingDelete().get());
-    renderPendingRename(_vm.pendingRename().get());
-    renderPendingRenameName(_vm.pendingRenameName().get());
 
     _render_ready = true;
 }

@@ -53,6 +53,13 @@ const FileEntry* FileBrowserModel::selectedEntry() const
     return &list[static_cast<size_t>(index)];
 }
 
+FileEntry FileBrowserModel::entryWithMetadata(const FileEntry& entry) const
+{
+    std::error_code ec;
+    const fs::directory_entry item(entry.path, ec);
+    return ec ? entry : makeEntry(item, true);
+}
+
 void FileBrowserModel::refresh(bool preserveSelected)
 {
     const FileEntry* selected       = selectedEntry();
@@ -67,7 +74,7 @@ void FileBrowserModel::refreshSelecting(const std::string& preferredPath)
 
     for (const auto& item :
          fs::directory_iterator(_current_directory.get(), fs::directory_options::skip_permission_denied, ec)) {
-        list.push_back(makeEntry(pathString(item.path())));
+        list.push_back(makeEntry(item, false));
     }
 
     if (ec) {
@@ -128,7 +135,7 @@ FileOperationResult FileBrowserModel::openSelected(FileEntry* openedFile)
     }
 
     if (openedFile) {
-        *openedFile = *selected;
+        *openedFile = entryWithMetadata(*selected);
     }
     return FileOperationResult{};
 }
@@ -301,16 +308,16 @@ FileOperationResult FileBrowserModel::deleteSelected()
     return FileOperationResult{};
 }
 
-FileEntry FileBrowserModel::makeEntry(const std::string& path) const
+FileEntry FileBrowserModel::makeEntry(const fs::directory_entry& item, bool includeMetadata) const
 {
     std::error_code ec;
-    fs::directory_entry item(path, ec);
-    fs::path fsPath(path);
-    const bool directory        = !ec && item.is_directory(ec);
+    const fs::path fsPath       = item.path();
+    const bool directory        = item.is_directory(ec);
     const std::string extension = directory ? "" : normalizedExtension(fsPath.extension().string());
 
     uint64_t size = 0;
-    if (!directory) {
+    if (includeMetadata && !directory) {
+        ec.clear();
         size = static_cast<uint64_t>(item.file_size(ec));
         if (ec) {
             size = 0;
@@ -325,7 +332,7 @@ FileEntry FileBrowserModel::makeEntry(const std::string& path) const
     entry.kind            = directory ? FileKind::Directory : _file_types.kindForExtension(extension);
     entry.icon            = _file_types.iconFor(entry);
     entry.size            = size;
-    entry.modifiedUnixSec = modifiedUnixSec(item);
+    entry.modifiedUnixSec = includeMetadata ? modifiedUnixSec(item) : 0;
     entry.hidden          = !entry.name.empty() && entry.name.front() == '.';
     entry.readable        = true;
     entry.writable        = true;

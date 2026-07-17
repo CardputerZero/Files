@@ -2,6 +2,7 @@
 
 #include "core/files_types.hpp"
 #include "models/file_type_registry.hpp"
+#include <filesystem>
 #include <tools/observable/single_observable.hpp>
 #include <string>
 #include <vector>
@@ -33,6 +34,7 @@ public:
     }
 
     const FileEntry* selectedEntry() const;
+    FileEntry entryWithMetadata(const FileEntry& entry) const;
     void refresh(bool preserveSelected = true);
     void selectPrevious();
     void selectNext();
@@ -58,7 +60,7 @@ private:
     smooth_ui_toolkit::SingleObservable<std::string> _status{""};
     std::vector<HistoryEntry> _history;
 
-    FileEntry makeEntry(const std::string& path) const;
+    FileEntry makeEntry(const std::filesystem::directory_entry& item, bool includeMetadata) const;
     void setEntries(std::vector<FileEntry> entries, const std::string& preferredPath);
     void refreshSelecting(const std::string& preferredPath);
     FileOperationResult goToDirectory(const std::string& path, bool pushHistory, const std::string& preferredPath);
