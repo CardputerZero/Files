@@ -1,6 +1,7 @@
 #include "models/file_browser_model.hpp"
 
 #include "core/files_config.hpp"
+#include "models/filesystem_transfer.hpp"
 #include <spdlog/spdlog.h>
 #include <algorithm>
 #include <chrono>
@@ -183,31 +184,20 @@ FileOperationResult FileBrowserModel::goToDirectory(const std::string& path, boo
 
 FileOperationResult FileBrowserModel::copyEntryTo(const FileEntry& entry, const std::string& destinationDirectory)
 {
-    std::error_code ec;
-    fs::path destination = fs::path(destinationDirectory) / entry.name;
-    if (pathString(destination) == entry.path) {
-        const fs::path stem      = destination.stem();
-        const fs::path extension = destination.extension();
-        destination              = destination.parent_path() / (stem.string() + " copy" + extension.string());
-        int index                = 2;
-        while (fs::exists(destination, ec)) {
-            destination =
-                destination.parent_path() / (stem.string() + " copy " + std::to_string(index) + extension.string());
-            ++index;
-        }
+    const fs::path source(entry.path);
+    const std::string sourceName = entry.name;
+    const internal::FilesystemTransferResult transfer =
+        internal::copyPathToDirectory(source, fs::path(destinationDirectory));
+    if (!transfer) {
+        spdlog::warn("FileBrowserModel: copy failed source='{}' directory='{}' reason={} detail={}", source.string(),
+                     destinationDirectory, internal::filesystemTransferFailureName(transfer.failure), transfer.detail);
+        return errorResult(FileOperationStatus::Failed, "Copy failed: " + transfer.detail);
     }
 
-    if (entry.directory) {
-        fs::copy(entry.path, destination, fs::copy_options::recursive | fs::copy_options::skip_existing, ec);
-    } else {
-        fs::copy_file(entry.path, destination, fs::copy_options::skip_existing, ec);
-    }
-
-    if (ec) {
-        return errorResult(FileOperationStatus::Failed, "Copy failed: " + ec.message());
-    }
     refresh(false);
-    _status.set("Copied " + entry.name);
+    _status.set("Copied " + sourceName);
+    spdlog::info("FileBrowserModel: copied source='{}' destination='{}'", source.string(),
+                 transfer.destination.string());
     return FileOperationResult{};
 }
 
@@ -223,37 +213,23 @@ FileOperationResult FileBrowserModel::copySelectedTo(const std::string& destinat
 
 FileOperationResult FileBrowserModel::moveEntryTo(const FileEntry& entry, const std::string& destinationDirectory)
 {
-    std::error_code ec;
     const fs::path source(entry.path);
-    const fs::path destination = fs::path(destinationDirectory) / entry.name;
-    if (pathString(destination) == entry.path) {
+    const std::string sourceName = entry.name;
+    const internal::FilesystemTransferResult transfer =
+        internal::movePathToDirectory(source, fs::path(destinationDirectory));
+    if (transfer.failure == internal::FilesystemTransferFailure::SamePath) {
         return errorResult(FileOperationStatus::InvalidSelection, "Already here");
     }
-    if (fs::exists(destination, ec)) {
-        return errorResult(FileOperationStatus::Failed, "Name already exists");
-    }
-
-    fs::rename(source, destination, ec);
-    if (ec) {
-        if (entry.directory) {
-            fs::copy(entry.path, destination, fs::copy_options::recursive | fs::copy_options::skip_existing, ec);
-            if (!ec) {
-                fs::remove_all(source, ec);
-            }
-        } else {
-            fs::copy_file(entry.path, destination, fs::copy_options::skip_existing, ec);
-            if (!ec) {
-                fs::remove(source, ec);
-            }
-        }
-    }
-
-    if (ec) {
-        return errorResult(FileOperationStatus::Failed, "Cut failed: " + ec.message());
+    if (!transfer) {
+        spdlog::warn("FileBrowserModel: move failed source='{}' directory='{}' reason={} detail={}", source.string(),
+                     destinationDirectory, internal::filesystemTransferFailureName(transfer.failure), transfer.detail);
+        return errorResult(FileOperationStatus::Failed, "Cut failed: " + transfer.detail);
     }
 
     refresh(false);
-    _status.set("Moved " + entry.name);
+    _status.set("Moved " + sourceName);
+    spdlog::info("FileBrowserModel: moved source='{}' destination='{}'", source.string(),
+                 transfer.destination.string());
     return FileOperationResult{};
 }
 

@@ -4,7 +4,10 @@ project(M5CardputerZeroFiles VERSION 0.1.1 LANGUAGES C CXX ASM)
 
 option(FILES_USE_SDL "Use LVGL's SDL backend for desktop testing" ON)
 option(FILES_CONVERT_ASSETS "Convert image assets during CMake configure" ON)
+option(BUILD_TESTING "Build Files tests" OFF)
 set(FILES_BIN_NAME "M5CardputerZero-Files" CACHE STRING "Output executable name")
+
+include(CTest)
 
 if(APPLE AND NOT FILES_USE_SDL)
     message(FATAL_ERROR "macOS builds only support FILES_USE_SDL=ON.")
@@ -196,3 +199,18 @@ target_link_libraries(${FILES_BIN_NAME} PRIVATE
 set_target_properties(${FILES_BIN_NAME} PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${FILES_ROOT}/dist"
 )
+
+if(BUILD_TESTING)
+    add_executable(filesystem_transfer_tests
+        tests/filesystem_transfer_test.cpp
+        src/models/filesystem_transfer.cpp
+    )
+    target_include_directories(filesystem_transfer_tests PRIVATE
+        "${FILES_SRC_DIR}"
+    )
+    target_link_libraries(filesystem_transfer_tests PRIVATE
+        spdlog::spdlog
+        Threads::Threads
+    )
+    add_test(NAME filesystem_transfer COMMAND filesystem_transfer_tests)
+endif()
