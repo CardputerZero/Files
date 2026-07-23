@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(M5CardputerZeroFiles VERSION 0.1.2 LANGUAGES C CXX ASM)
+project(M5CardputerZeroFiles VERSION 0.1.3 LANGUAGES C CXX ASM)
 
 option(FILES_USE_SDL "Use LVGL's SDL backend for desktop testing" ON)
 option(FILES_CONVERT_ASSETS "Convert image assets during CMake configure" ON)
