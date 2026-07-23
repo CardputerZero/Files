@@ -180,6 +180,7 @@ target_include_directories(${FILES_BIN_NAME} PRIVATE
     "${FILES_SRC_DIR}"
     "${FILES_SRC_DIR}/assets"
     "${FILES_MINIAUDIO_DIR}"
+    "${FILES_LVGL_DIR}/src/libs/tjpgd"
 )
 
 target_compile_definitions(${FILES_BIN_NAME} PRIVATE
@@ -213,4 +214,26 @@ if(BUILD_TESTING)
         Threads::Threads
     )
     add_test(NAME filesystem_transfer COMMAND filesystem_transfer_tests)
+
+    add_executable(jpeg_decoder_tests
+        tests/jpeg_decoder_test.cpp
+        src/preview/image/jpeg_decoder.cpp
+    )
+    target_include_directories(jpeg_decoder_tests PRIVATE
+        "${FILES_SRC_DIR}"
+        "${FILES_LVGL_DIR}/src/libs/tjpgd"
+    )
+    target_compile_definitions(jpeg_decoder_tests PRIVATE
+        FILES_TEST_JPEG_PATH="${FILES_LVGL_DIR}/examples/libs/tjpgd/img_lvgl_logo.jpg"
+        FILES_TEST_MISSING_JPEG_PATH="${CMAKE_CURRENT_BINARY_DIR}/missing-image.jpg"
+        FILES_TEST_INVALID_JPEG_PATH="${CMAKE_CURRENT_BINARY_DIR}/invalid-image.jpg"
+    )
+    target_link_libraries(jpeg_decoder_tests PRIVATE
+        lvgl::lvgl
+        spdlog::spdlog
+        Threads::Threads
+        ${FILES_SDL_LIBS}
+        ${FILES_SYSTEM_LIBS}
+    )
+    add_test(NAME jpeg_decoder COMMAND jpeg_decoder_tests)
 endif()

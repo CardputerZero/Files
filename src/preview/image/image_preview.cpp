@@ -3,6 +3,7 @@
 #include "assets/assets.h"
 #include "assets/font_assets.hpp"
 #include "preview/common/bottom_key_bar.hpp"
+#include "preview/image/jpeg_decoder.hpp"
 #include <lvgl/lvgl_cpp/image.hpp>
 #include <lvgl/lvgl_cpp/label.hpp>
 #include <lvgl/lvgl_cpp/obj.hpp>
@@ -47,6 +48,11 @@ bool extensionIsGif(const std::string& extension)
     return extension == ".gif";
 }
 
+bool extensionIsJpeg(const std::string& extension)
+{
+    return extension == ".jpeg" || extension == ".jpg";
+}
+
 std::string lvglPath(const std::string& path)
 {
     if (path.size() >= 2 && path[1] == ':') {
@@ -87,13 +93,20 @@ public:
     explicit ImagePreviewPage(FileEntry file)
         : _file(std::move(file)), _title(fileTitle(_file)), _lvgl_path(lvglPath(_file.path))
     {
-        _is_gif = extensionIsGif(_file.extension);
+        _is_gif  = extensionIsGif(_file.extension);
+        _is_jpeg = extensionIsJpeg(_file.extension);
         if (_is_gif) {
             uint16_t width  = 0;
             uint16_t height = 0;
             if (lv_gif_get_size(_lvgl_path.c_str(), &width, &height)) {
                 _image_width  = width;
                 _image_height = height;
+            }
+        } else if (_is_jpeg) {
+            _jpeg_buffer = decodeJpegFile(_file.path);
+            if (_jpeg_buffer) {
+                _image_width  = _jpeg_buffer->header.w;
+                _image_height = _jpeg_buffer->header.h;
             }
         } else {
             lv_image_header_t header{};
@@ -138,18 +151,23 @@ public:
         _viewport->setPaddingAll(0);
         _viewport->setScrollbarMode(LV_SCROLLBAR_MODE_OFF);
         _viewport->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_set_style_clip_corner(_viewport->raw_ptr(), true, LV_PART_MAIN);
 
         if (_is_gif) {
             _gif = lv_gif_create(_viewport->raw_ptr());
             lv_gif_set_src(_gif, _lvgl_path.c_str());
-            lv_image_set_pivot(_gif, LV_PCT(50), LV_PCT(50));
+            lv_image_set_pivot(_gif, 0, 0);
             _preview_loaded = lv_gif_is_loaded(_gif);
         } else {
             _image = std::make_unique<smooth_ui_toolkit::lvgl_cpp::Image>(_viewport->raw_ptr());
-            _image->setSrc(_lvgl_path.c_str());
-            _image->setPivot(LV_PCT(50), LV_PCT(50));
-            _preview_loaded = _image_width > 0 && _image_height > 0;
+            if (_is_jpeg) {
+                if (_jpeg_buffer) {
+                    _image->setSrc(_jpeg_buffer.get());
+                }
+            } else {
+                _image->setSrc(_lvgl_path.c_str());
+            }
+            _image->setPivot(0, 0);
+            _preview_loaded = _is_jpeg ? static_cast<bool>(_jpeg_buffer) : _image_width > 0 && _image_height > 0;
         }
 
         _error_label = std::make_unique<smooth_ui_toolkit::lvgl_cpp::Label>(_viewport->raw_ptr());
@@ -235,6 +253,7 @@ private:
     FileEntry _file;
     std::string _title;
     std::string _lvgl_path;
+    DrawBufferPtr _jpeg_buffer;
     std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Container> _root;
     std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Label> _title_label;
     std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Container> _viewport;
@@ -245,10 +264,11 @@ private:
     uint32_t _image_width  = 0;
     uint32_t _image_height = 0;
     uint32_t _scale        = LV_SCALE_NONE;
-    int32_t _offset_x      = 0;
-    int32_t _offset_y      = 0;
+    int32_t _view_x        = 0;
+    int32_t _view_y        = 0;
     bool _fullscreen       = false;
     bool _is_gif           = false;
+    bool _is_jpeg          = false;
     bool _preview_loaded   = false;
 
     int32_t viewportWidth() const
@@ -269,16 +289,16 @@ private:
 
     void resetForCurrentMode()
     {
-        _scale    = defaultScale();
-        _offset_x = 0;
-        _offset_y = 0;
+        _scale  = defaultScale();
+        _view_x = 0;
+        _view_y = 0;
         applyLayout();
     }
 
     void move(int32_t dx, int32_t dy)
     {
-        _offset_x += dx;
-        _offset_y += dy;
+        _view_x += dx;
+        _view_y += dy;
         applyImageTransform();
     }
 
@@ -299,6 +319,8 @@ private:
         if (_fullscreen) {
             _viewport->setPos(kFullscreenX, kFullscreenY);
             _viewport->setSize(kFullscreenWidth, kFullscreenHeight);
+            _viewport->setRadius(0);
+            lv_obj_set_style_clip_corner(_viewport->raw_ptr(), false, LV_PART_MAIN);
             if (_title_label) {
                 _title_label->addFlag(LV_OBJ_FLAG_HIDDEN);
             }
@@ -308,6 +330,8 @@ private:
         } else {
             _viewport->setPos(kPreviewX, kPreviewY);
             _viewport->setSize(kPreviewWidth, kPreviewHeight);
+            lv_obj_remove_local_style_prop(_viewport->raw_ptr(), LV_STYLE_RADIUS, LV_PART_MAIN);
+            lv_obj_set_style_clip_corner(_viewport->raw_ptr(), true, LV_PART_MAIN);
             if (_title_label) {
                 _title_label->removeFlag(LV_OBJ_FLAG_HIDDEN);
             }
@@ -336,7 +360,20 @@ private:
 
         lv_obj_set_size(image_obj, static_cast<int32_t>(_image_width), static_cast<int32_t>(_image_height));
         lv_image_set_scale(image_obj, _scale);
-        lv_obj_align(image_obj, LV_ALIGN_CENTER, _offset_x, _offset_y);
+
+        const int32_t transformed_width  = lv_image_get_transformed_width(image_obj);
+        const int32_t transformed_height = lv_image_get_transformed_height(image_obj);
+        const int32_t base_x             = viewportWidth() / 2 - transformed_width / 2;
+        const int32_t base_y             = viewportHeight() / 2 - transformed_height / 2;
+
+        _view_x = transformed_width <= viewportWidth()
+                      ? 0
+                      : std::clamp(_view_x, base_x, base_x + transformed_width - viewportWidth());
+        _view_y = transformed_height <= viewportHeight()
+                      ? 0
+                      : std::clamp(_view_y, base_y, base_y + transformed_height - viewportHeight());
+
+        lv_obj_align(image_obj, LV_ALIGN_TOP_LEFT, base_x - _view_x, base_y - _view_y);
     }
 };
 
