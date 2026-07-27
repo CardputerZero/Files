@@ -18,22 +18,23 @@
 namespace files {
 namespace {
 
-constexpr int32_t kScreenWidth      = 320;
-constexpr int32_t kScreenHeight     = 170;
-constexpr int32_t kTitleWidth       = 230;
-constexpr int32_t kTitleY           = -5;
-constexpr int32_t kPreviewX         = 20;
-constexpr int32_t kPreviewY         = 18;
-constexpr int32_t kPreviewWidth     = 280;
-constexpr int32_t kPreviewHeight    = 110;
-constexpr int32_t kFullscreenX      = 0;
-constexpr int32_t kFullscreenY      = 0;
-constexpr int32_t kFullscreenWidth  = kScreenWidth;
-constexpr int32_t kFullscreenHeight = kScreenHeight;
-constexpr int32_t kMoveStep         = 16;
-constexpr uint32_t kMinScale        = 32;
-constexpr uint32_t kMaxScale        = 2048;
-constexpr uint32_t kScaleStep       = 32;
+constexpr int32_t kScreenWidth                 = 320;
+constexpr int32_t kScreenHeight                = 170;
+constexpr int32_t kTitleWidth                  = 230;
+constexpr int32_t kTitleY                      = -5;
+constexpr int32_t kPreviewX                    = 20;
+constexpr int32_t kPreviewY                    = 18;
+constexpr int32_t kPreviewWidth                = 280;
+constexpr int32_t kPreviewHeight               = 110;
+constexpr int32_t kFullscreenX                 = 0;
+constexpr int32_t kFullscreenY                 = 0;
+constexpr int32_t kFullscreenWidth             = kScreenWidth;
+constexpr int32_t kFullscreenHeight            = kScreenHeight;
+constexpr int32_t kMoveStep                    = 16;
+constexpr uint32_t kMinScale                   = 32;
+constexpr uint32_t kMaxScale                   = 2048;
+constexpr uint32_t kScaleStep                  = 32;
+constexpr int32_t kCounterClockwiseQuarterTurn = 2700;
 
 bool extensionUsuallyImage(const std::string& extension)
 {
@@ -155,7 +156,7 @@ public:
         if (_is_gif) {
             _gif = lv_gif_create(_viewport->raw_ptr());
             lv_gif_set_src(_gif, _lvgl_path.c_str());
-            lv_image_set_pivot(_gif, 0, 0);
+            lv_image_set_pivot(_gif, static_cast<int32_t>(_image_width / 2), static_cast<int32_t>(_image_height / 2));
             _preview_loaded = lv_gif_is_loaded(_gif);
         } else {
             _image = std::make_unique<smooth_ui_toolkit::lvgl_cpp::Image>(_viewport->raw_ptr());
@@ -166,7 +167,7 @@ public:
             } else {
                 _image->setSrc(_lvgl_path.c_str());
             }
-            _image->setPivot(0, 0);
+            _image->setPivot(static_cast<int32_t>(_image_width / 2), static_cast<int32_t>(_image_height / 2));
             _preview_loaded = _is_jpeg ? static_cast<bool>(_jpeg_buffer) : _image_width > 0 && _image_height > 0;
         }
 
@@ -189,7 +190,7 @@ public:
             {'8', &image_icon_reset},
         });
 
-        resetForCurrentMode();
+        fitForCurrentMode();
     }
 
     void detach() override
@@ -225,7 +226,7 @@ public:
                 break;
             case '4':
                 _fullscreen = !_fullscreen;
-                resetForCurrentMode();
+                fitForCurrentMode();
                 break;
             case '5':
                 zoom(-static_cast<int32_t>(kScaleStep));
@@ -234,7 +235,7 @@ public:
                 zoom(static_cast<int32_t>(kScaleStep));
                 break;
             case '8':
-                resetForCurrentMode();
+                rotateCounterClockwise();
                 break;
             default:
                 break;
@@ -264,6 +265,7 @@ private:
     uint32_t _image_width  = 0;
     uint32_t _image_height = 0;
     uint32_t _scale        = LV_SCALE_NONE;
+    int32_t _rotation      = 0;
     int32_t _view_x        = 0;
     int32_t _view_y        = 0;
     bool _fullscreen       = false;
@@ -283,16 +285,25 @@ private:
 
     uint32_t defaultScale() const
     {
-        return fitScale(_image_width, _image_height, static_cast<uint32_t>(viewportWidth()),
+        const bool swaps_axes       = _rotation % 1800 != 0;
+        const uint32_t image_width  = swaps_axes ? _image_height : _image_width;
+        const uint32_t image_height = swaps_axes ? _image_width : _image_height;
+        return fitScale(image_width, image_height, static_cast<uint32_t>(viewportWidth()),
                         static_cast<uint32_t>(viewportHeight()));
     }
 
-    void resetForCurrentMode()
+    void fitForCurrentMode()
     {
         _scale  = defaultScale();
         _view_x = 0;
         _view_y = 0;
         applyLayout();
+    }
+
+    void rotateCounterClockwise()
+    {
+        _rotation = (_rotation + kCounterClockwiseQuarterTurn) % 3600;
+        fitForCurrentMode();
     }
 
     void move(int32_t dx, int32_t dy)
@@ -359,21 +370,25 @@ private:
         }
 
         lv_obj_set_size(image_obj, static_cast<int32_t>(_image_width), static_cast<int32_t>(_image_height));
+        lv_image_set_pivot(image_obj, static_cast<int32_t>(_image_width / 2), static_cast<int32_t>(_image_height / 2));
+        lv_image_set_rotation(image_obj, _rotation);
         lv_image_set_scale(image_obj, _scale);
 
         const int32_t transformed_width  = lv_image_get_transformed_width(image_obj);
         const int32_t transformed_height = lv_image_get_transformed_height(image_obj);
-        const int32_t base_x             = viewportWidth() / 2 - transformed_width / 2;
-        const int32_t base_y             = viewportHeight() / 2 - transformed_height / 2;
+        const int32_t pan_min_x          = viewportWidth() / 2 - transformed_width / 2;
+        const int32_t pan_min_y          = viewportHeight() / 2 - transformed_height / 2;
 
         _view_x = transformed_width <= viewportWidth()
                       ? 0
-                      : std::clamp(_view_x, base_x, base_x + transformed_width - viewportWidth());
+                      : std::clamp(_view_x, pan_min_x, pan_min_x + transformed_width - viewportWidth());
         _view_y = transformed_height <= viewportHeight()
                       ? 0
-                      : std::clamp(_view_y, base_y, base_y + transformed_height - viewportHeight());
+                      : std::clamp(_view_y, pan_min_y, pan_min_y + transformed_height - viewportHeight());
 
-        lv_obj_align(image_obj, LV_ALIGN_TOP_LEFT, base_x - _view_x, base_y - _view_y);
+        const int32_t image_x = viewportWidth() / 2 - static_cast<int32_t>(_image_width) / 2 - _view_x;
+        const int32_t image_y = viewportHeight() / 2 - static_cast<int32_t>(_image_height) / 2 - _view_y;
+        lv_obj_align(image_obj, LV_ALIGN_TOP_LEFT, image_x, image_y);
     }
 };
 

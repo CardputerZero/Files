@@ -7,7 +7,7 @@ File browser and preview app for M5Stack CardputerZero.
 - Browse folders with animated file menu and long-name scrolling
 - Copy, cut, paste, rename, delete, and inspect file metadata
 - Preview text files with CJK-capable Noto Sans fonts and scroll progress
-- Preview images with pan, zoom, reset, fullscreen, and GIF support
+- Preview images with pan, zoom, counter-clockwise rotation, fullscreen, and GIF support
 - Play audio files with seek and 1x/2x/5x speed controls
 - Play video files fullscreen through `ffmpeg` on the device framebuffer
 - Fall back to an info preview for unsupported file types
@@ -114,7 +114,7 @@ Key controls:
 - Browser page: Up/Down select, Enter open, Tab action menu, Esc or Left back
 - Action menu: Up/Down select, Enter confirm, Esc/Left/Tab close
 - Text preview: Up/Down scroll, Esc or Left back
-- Image preview: arrows pan, `4` fullscreen, `5` zoom out, `7` zoom in, `8` reset, Esc back
+- Image preview: arrows pan, `4` fullscreen, `5` zoom out, `7` zoom in, `8` rotate left, Esc back
 - Audio preview: `5` back 10s, `6` play/pause, `7` forward 10s, `8` speed, Esc/Left back
 - Video preview: Space pause/resume, Left/Right seek, Esc back
 
