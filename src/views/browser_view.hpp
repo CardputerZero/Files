@@ -27,6 +27,7 @@ private:
     class MenuCursor;
     class DeleteConfirmDialog;
     class RenameConfirmDialog;
+    class StatusHud;
     class TipsHud;
 
     BrowserViewModel& _vm;
@@ -38,6 +39,7 @@ private:
     std::unique_ptr<MenuCursor> _cursor;
     std::unique_ptr<DeleteConfirmDialog> _delete_confirm_dialog;
     std::unique_ptr<RenameConfirmDialog> _rename_confirm_dialog;
+    std::unique_ptr<StatusHud> _status_hud;
     std::unique_ptr<TipsHud> _tips_hud;
     std::unique_ptr<MagicView> _magic_view;
     uint32_t _magic_serial_seen = 0;

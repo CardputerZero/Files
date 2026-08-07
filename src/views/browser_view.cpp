@@ -66,6 +66,11 @@ constexpr int32_t kDeleteOpenOriginX        = 0;
 constexpr int32_t kDeleteOpenOriginY        = -150;
 constexpr int32_t kDeleteOpenOriginWidth    = 180;
 constexpr int32_t kDeleteOpenOriginHeight   = 120;
+constexpr int32_t kStatusHudHeight          = 28;
+constexpr int32_t kStatusHudMinWidth        = 96;
+constexpr int32_t kStatusHudMaxWidth        = 300;
+constexpr int32_t kStatusHudShownY          = 135;
+constexpr int32_t kStatusHudHiddenY         = 171;
 constexpr int32_t kHudShownY                = 137;
 constexpr int32_t kHudHiddenY               = 171;
 constexpr uint32_t kPathBarColor            = 0x313131;
@@ -82,6 +87,7 @@ constexpr float kSelectorShapeBounce        = 0.18f;
 constexpr float kCameraDuration             = 0.44f;
 constexpr float kActionMenuDuration         = 0.36f;
 constexpr uint32_t kMenuRenderInterval      = 16;
+constexpr uint32_t kStatusHudHoldMs         = 3600;
 constexpr uint32_t kHudHoldMs               = 10000;
 
 std::string compactPath(const std::string& path)
@@ -163,6 +169,19 @@ int32_t textWidth(const std::string& text)
     lv_point_t size{};
     lv_text_get_size(&size, text.c_str(), uiFont14(), 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
     return size.x;
+}
+
+int32_t statusTextWidth(const std::string& text)
+{
+    lv_point_t size{};
+    lv_text_get_size(&size, text.c_str(), uiFont12(), 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    return size.x;
+}
+
+bool isRenameErrorStatus(const std::string& status)
+{
+    return status == "Name already exists" || status == "Permission denied" || status == "Invalid name" ||
+           status.rfind("Rename failed:", 0) == 0;
 }
 
 int32_t optionWidth(const std::string& text)
@@ -1034,6 +1053,7 @@ public:
     void setPending(const PendingRenameFile& pending)
     {
         if (pending.active) {
+            resetPrompt();
             _panel->removeFlag(LV_OBJ_FLAG_HIDDEN);
             lv_obj_move_foreground(_panel->raw_ptr());
             _visible = true;
@@ -1057,6 +1077,7 @@ public:
 
     void setName(const std::string& name)
     {
+        resetPrompt();
         const char* current = lv_textarea_get_text(_input->raw_ptr());
         if (current && name == current) {
             return;
@@ -1066,6 +1087,12 @@ public:
         _input->setText(name);
         _input->setCursorPos(static_cast<int32_t>(name.size()));
         _updating_text = false;
+    }
+
+    void setError(const std::string& message)
+    {
+        _prompt_label->setText(message.c_str());
+        _prompt_label->setTextColor(lv_color_hex(0xFF9A9A));
     }
 
     void tick()
@@ -1132,12 +1159,17 @@ private:
 
     void setupPrompt()
     {
-        _prompt_label->setText("Rename file");
         _prompt_label->setTextFont(uiFont14());
-        _prompt_label->setTextColor(lv_color_hex(0xA1A1A1));
         _prompt_label->setTextAlign(LV_TEXT_ALIGN_LEFT);
         _prompt_label->setSize(230, LV_SIZE_CONTENT);
         _prompt_label->align(LV_ALIGN_CENTER, 0, kDeletePromptCenterY);
+        resetPrompt();
+    }
+
+    void resetPrompt()
+    {
+        _prompt_label->setText("Rename file");
+        _prompt_label->setTextColor(lv_color_hex(0xA1A1A1));
     }
 
     void setupInput()
@@ -1234,6 +1266,84 @@ private:
     }
 };
 
+class BrowserView::StatusHud {
+public:
+    explicit StatusHud(lv_obj_t* parent)
+        : _panel(std::make_unique<smooth_ui_toolkit::lvgl_cpp::Container>(parent)),
+          _label(std::make_unique<smooth_ui_toolkit::lvgl_cpp::Label>(_panel->raw_ptr())),
+          _y(kStatusHudHiddenY)
+    {
+        _panel->setSize(kStatusHudMinWidth, kStatusHudHeight);
+        _panel->setPos((kScreenWidth - kStatusHudMinWidth) / 2, kStatusHudHiddenY);
+        _panel->setBgColor(lv_color_hex(0x414141));
+        _panel->setBgOpa(LV_OPA_COVER);
+        _panel->setRadius(7);
+        _panel->setBorderWidth(1);
+        _panel->setBorderColor(lv_color_hex(0x696969));
+        _panel->setShadowWidth(0);
+        _panel->setPaddingAll(0);
+        _panel->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
+        _panel->addFlag(LV_OBJ_FLAG_HIDDEN);
+
+        _label->setTextFont(uiFont12());
+        _label->setTextColor(lv_color_hex(0xF4F4F4));
+        _label->setTextAlign(LV_TEXT_ALIGN_CENTER);
+        _label->setLongMode(LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
+
+        _y.springOptions().visualDuration = 0.32;
+        _y.springOptions().bounce         = 0.16f;
+        _y.begin();
+    }
+
+    void show(const std::string& message, uint32_t nowMs)
+    {
+        const int32_t width = std::clamp(statusTextWidth(message) + 24, kStatusHudMinWidth, kStatusHudMaxWidth);
+        _panel->setSize(width, kStatusHudHeight);
+        _panel->setX((kScreenWidth - width) / 2);
+        _label->setSize(width - 16, lv_font_get_line_height(uiFont12()));
+        _label->center();
+        _label->setText(message.c_str());
+        _panel->removeFlag(LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(_panel->raw_ptr());
+
+        if (!_visible) {
+            _y.teleport(kStatusHudHiddenY);
+        }
+        _y.springOptions().visualDuration = 0.32;
+        _y.springOptions().bounce         = 0.16f;
+        _y.move(kStatusHudShownY);
+        _shown_at_ms = nowMs;
+        _closing     = false;
+        _visible     = true;
+    }
+
+    void tick(uint32_t nowMs)
+    {
+        if (!_visible) {
+            return;
+        }
+        if (!_closing && nowMs >= _shown_at_ms + kStatusHudHoldMs) {
+            _closing                          = true;
+            _y.springOptions().visualDuration = 0.26;
+            _y.springOptions().bounce         = 0.0f;
+            _y.move(kStatusHudHiddenY);
+        }
+        _panel->setY(static_cast<int32_t>(std::round(_y.value())));
+        if (_closing && _y.done()) {
+            _panel->addFlag(LV_OBJ_FLAG_HIDDEN);
+            _visible = false;
+        }
+    }
+
+private:
+    std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Container> _panel;
+    std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Label> _label;
+    smooth_ui_toolkit::AnimateValue _y;
+    uint32_t _shown_at_ms = 0;
+    bool _closing         = false;
+    bool _visible         = false;
+};
+
 class BrowserView::TipsHud {
 public:
     explicit TipsHud(lv_obj_t* parent)
@@ -1327,6 +1437,7 @@ void BrowserView::onEnter(lv_obj_t* parent)
     _cursor                = std::make_unique<MenuCursor>(_root->raw_ptr());
     _delete_confirm_dialog = std::make_unique<DeleteConfirmDialog>(_root->raw_ptr());
     _rename_confirm_dialog = std::make_unique<RenameConfirmDialog>(_root->raw_ptr(), _vm);
+    _status_hud            = std::make_unique<StatusHud>(_root->raw_ptr());
     _magic_view            = std::make_unique<MagicView>(_root->raw_ptr());
     if (!_tips_hud_shown) {
         _tips_hud       = std::make_unique<TipsHud>(_root->raw_ptr());
@@ -1368,6 +1479,9 @@ void BrowserView::tick(uint32_t nowMs)
     if (_rename_confirm_dialog) {
         _rename_confirm_dialog->tick();
     }
+    if (_status_hud) {
+        _status_hud->tick(nowMs);
+    }
     updateCursorTarget();
     if (_tips_hud) {
         _tips_hud->tick(nowMs);
@@ -1393,6 +1507,7 @@ void BrowserView::destroy()
     _vm.currentDirectory().removeObserver();
     _magic_view.reset();
     _tips_hud.reset();
+    _status_hud.reset();
     _rename_confirm_dialog.reset();
     _delete_confirm_dialog.reset();
     _cursor.reset();
@@ -1437,7 +1552,16 @@ void BrowserView::renderSelectedIndex(int index)
 
 void BrowserView::renderStatus(const std::string& status)
 {
-    (void)status;
+    if (status.empty() || status == "Ready" || status == "Empty folder") {
+        return;
+    }
+    if (_rename_confirm_dialog && _vm.pendingRename().get().active && isRenameErrorStatus(status)) {
+        _rename_confirm_dialog->setError(status);
+        return;
+    }
+    if (_status_hud) {
+        _status_hud->show(status, lv_tick_get());
+    }
 }
 
 void BrowserView::renderEnterPressed(bool pressed)

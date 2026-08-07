@@ -37,6 +37,30 @@ FileOperationResult errorResult(FileOperationStatus status, std::string message)
     return FileOperationResult{status, std::move(message)};
 }
 
+bool isPermissionError(const std::error_code& error)
+{
+    return error == std::errc::permission_denied || error == std::errc::operation_not_permitted;
+}
+
+FileOperationResult filesystemError(const char* operation, const std::error_code& error)
+{
+    if (isPermissionError(error)) {
+        return errorResult(FileOperationStatus::PermissionDenied, "Permission denied");
+    }
+    return errorResult(FileOperationStatus::Failed, std::string(operation) + " failed: " + error.message());
+}
+
+FileOperationResult transferError(const char* operation, const internal::FilesystemTransferResult& transfer)
+{
+    if (transfer.failure == internal::FilesystemTransferFailure::DestinationExists) {
+        return errorResult(FileOperationStatus::Failed, "Name already exists");
+    }
+    if (isPermissionError(transfer.error)) {
+        return errorResult(FileOperationStatus::PermissionDenied, "Permission denied");
+    }
+    return errorResult(FileOperationStatus::Failed, std::string(operation) + " failed: " + transfer.detail);
+}
+
 }  // namespace
 
 FileBrowserModel::FileBrowserModel(std::string start_directory)
@@ -79,7 +103,7 @@ void FileBrowserModel::refreshSelecting(const std::string& preferredPath)
     }
 
     if (ec) {
-        _status.set("Read failed: " + ec.message());
+        _status.set(isPermissionError(ec) ? "Permission denied" : "Read failed: " + ec.message());
         spdlog::warn("FileBrowserModel: failed to read {}: {}", _current_directory.get(), ec.message());
     } else {
         _status.set(list.empty() ? "Empty folder" : "Ready");
@@ -168,7 +192,11 @@ FileOperationResult FileBrowserModel::goToDirectory(const std::string& path, boo
     std::error_code ec;
     const fs::path target        = fs::weakly_canonical(path, ec);
     const std::string targetPath = pathString(ec ? fs::path(path) : target);
+    ec.clear();
     if (!fs::is_directory(targetPath, ec)) {
+        if (ec) {
+            return filesystemError("Open", ec);
+        }
         return errorResult(FileOperationStatus::NotFound, "Folder not found");
     }
 
@@ -191,7 +219,7 @@ FileOperationResult FileBrowserModel::copyEntryTo(const FileEntry& entry, const 
     if (!transfer) {
         spdlog::warn("FileBrowserModel: copy failed source='{}' directory='{}' reason={} detail={}", source.string(),
                      destinationDirectory, internal::filesystemTransferFailureName(transfer.failure), transfer.detail);
-        return errorResult(FileOperationStatus::Failed, "Copy failed: " + transfer.detail);
+        return transferError("Copy", transfer);
     }
 
     refresh(false);
@@ -223,7 +251,7 @@ FileOperationResult FileBrowserModel::moveEntryTo(const FileEntry& entry, const 
     if (!transfer) {
         spdlog::warn("FileBrowserModel: move failed source='{}' directory='{}' reason={} detail={}", source.string(),
                      destinationDirectory, internal::filesystemTransferFailureName(transfer.failure), transfer.detail);
-        return errorResult(FileOperationStatus::Failed, "Cut failed: " + transfer.detail);
+        return transferError("Cut", transfer);
     }
 
     refresh(false);
@@ -253,10 +281,13 @@ FileOperationResult FileBrowserModel::renameSelectedTo(const std::string& name)
     if (fs::exists(destination, ec)) {
         return errorResult(FileOperationStatus::Failed, "Name already exists");
     }
+    if (ec) {
+        return filesystemError("Rename", ec);
+    }
 
     fs::rename(source, destination, ec);
     if (ec) {
-        return errorResult(FileOperationStatus::Failed, "Rename failed: " + ec.message());
+        return filesystemError("Rename", ec);
     }
 
     refreshSelecting(pathString(destination));
@@ -276,7 +307,7 @@ FileOperationResult FileBrowserModel::deleteSelected()
     std::error_code ec;
     fs::remove_all(deletedPath, ec);
     if (ec) {
-        return errorResult(FileOperationStatus::Failed, "Delete failed: " + ec.message());
+        return filesystemError("Delete", ec);
     }
 
     refresh(false);

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(M5CardputerZeroFiles VERSION 0.1.4 LANGUAGES C CXX ASM)
+project(M5CardputerZeroFiles VERSION 0.1.5 LANGUAGES C CXX ASM)
 
 option(FILES_USE_SDL "Use LVGL's SDL backend for desktop testing" ON)
 option(FILES_CONVERT_ASSETS "Convert image assets during CMake configure" ON)
@@ -202,6 +202,15 @@ set_target_properties(${FILES_BIN_NAME} PROPERTIES
 )
 
 if(BUILD_TESTING)
+    add_executable(cardputer_keymap_tests
+        tests/cardputer_keymap_test.cpp
+        src/input/cardputer_keymap.cpp
+    )
+    target_include_directories(cardputer_keymap_tests PRIVATE
+        "${FILES_SRC_DIR}"
+    )
+    add_test(NAME cardputer_keymap COMMAND cardputer_keymap_tests)
+
     add_executable(filesystem_transfer_tests
         tests/filesystem_transfer_test.cpp
         src/models/filesystem_transfer.cpp

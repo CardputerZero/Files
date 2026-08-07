@@ -1,5 +1,7 @@
 #pragma once
 
+#include "input/cardputer_keymap.hpp"
+
 #include <lvgl.h>
 #include <cstdint>
 #include <deque>
@@ -13,7 +15,7 @@ class FilesKeypad {
 public:
     using KeyCallback = std::function<bool(uint32_t, const char*, bool)>;
 
-    FilesKeypad() = default;
+    FilesKeypad();
     ~FilesKeypad();
 
     FilesKeypad(const FilesKeypad&)            = delete;
@@ -44,6 +46,7 @@ private:
     std::vector<int> _event_fds;
     std::deque<KeyEvent> _pending_keys;
     KeyCallback _key_callback;
+    CardputerKeymap _cardputer_keymap;
     uint32_t _last_key        = 0;
     bool _left_shift_pressed  = false;
     bool _right_shift_pressed = false;
