@@ -236,9 +236,11 @@ DrawBufferPtr decodeBmpFile(const std::string& path)
                 blue_value  = extractChannel(packed, blue, 0);
             }
             auto* out_pixel = destination + static_cast<size_t>(x) * 3U;
-            out_pixel[0]    = red_value;
+            // LVGL's RGB888 draw-buffer format stores channels as B, G, R
+            // in memory (the same layout produced by TJpgDec).
+            out_pixel[0]    = blue_value;
             out_pixel[1]    = green_value;
-            out_pixel[2]    = blue_value;
+            out_pixel[2]    = red_value;
         }
     }
 

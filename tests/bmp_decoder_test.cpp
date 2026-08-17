@@ -96,7 +96,8 @@ std::array<uint8_t, 3> pixelAt(const files::DrawBufferPtr& image, uint32_t x, ui
 {
     const auto* row = static_cast<const uint8_t*>(image->data) + static_cast<size_t>(y) * image->header.stride;
     const auto* rgb = row + static_cast<size_t>(x) * 3U;
-    return {rgb[0], rgb[1], rgb[2]};
+    // LVGL RGB888 buffers are stored as B, G, R; expose logical RGB to tests.
+    return {rgb[2], rgb[1], rgb[0]};
 }
 
 void verifyPixel(const files::DrawBufferPtr& image, uint32_t x, uint32_t y, std::array<uint8_t, 3> expected)
