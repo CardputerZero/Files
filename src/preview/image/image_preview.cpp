@@ -3,6 +3,7 @@
 #include "assets/assets.h"
 #include "assets/font_assets.hpp"
 #include "preview/common/bottom_key_bar.hpp"
+#include "preview/image/bmp_decoder.hpp"
 #include "preview/image/jpeg_decoder.hpp"
 #include <lvgl/lvgl_cpp/image.hpp>
 #include <lvgl/lvgl_cpp/label.hpp>
@@ -54,6 +55,11 @@ bool extensionIsJpeg(const std::string& extension)
     return extension == ".jpeg" || extension == ".jpg";
 }
 
+bool extensionIsBmp(const std::string& extension)
+{
+    return extension == ".bmp";
+}
+
 std::string lvglPath(const std::string& path)
 {
     if (path.size() >= 2 && path[1] == ':') {
@@ -96,6 +102,7 @@ public:
     {
         _is_gif  = extensionIsGif(_file.extension);
         _is_jpeg = extensionIsJpeg(_file.extension);
+        _is_bmp  = extensionIsBmp(_file.extension);
         if (_is_gif) {
             uint16_t width  = 0;
             uint16_t height = 0;
@@ -108,6 +115,12 @@ public:
             if (_jpeg_buffer) {
                 _image_width  = _jpeg_buffer->header.w;
                 _image_height = _jpeg_buffer->header.h;
+            }
+        } else if (_is_bmp) {
+            _bmp_buffer = decodeBmpFile(_file.path);
+            if (_bmp_buffer) {
+                _image_width  = _bmp_buffer->header.w;
+                _image_height = _bmp_buffer->header.h;
             }
         } else {
             lv_image_header_t header{};
@@ -164,11 +177,17 @@ public:
                 if (_jpeg_buffer) {
                     _image->setSrc(_jpeg_buffer.get());
                 }
+            } else if (_is_bmp) {
+                if (_bmp_buffer) {
+                    _image->setSrc(_bmp_buffer.get());
+                }
             } else {
                 _image->setSrc(_lvgl_path.c_str());
             }
             _image->setPivot(static_cast<int32_t>(_image_width / 2), static_cast<int32_t>(_image_height / 2));
-            _preview_loaded = _is_jpeg ? static_cast<bool>(_jpeg_buffer) : _image_width > 0 && _image_height > 0;
+            _preview_loaded = (_is_jpeg && static_cast<bool>(_jpeg_buffer)) ||
+                              (_is_bmp && static_cast<bool>(_bmp_buffer)) ||
+                              (!_is_jpeg && !_is_bmp && _image_width > 0 && _image_height > 0);
         }
 
         _error_label = std::make_unique<smooth_ui_toolkit::lvgl_cpp::Label>(_viewport->raw_ptr());
@@ -255,6 +274,7 @@ private:
     std::string _title;
     std::string _lvgl_path;
     DrawBufferPtr _jpeg_buffer;
+    DrawBufferPtr _bmp_buffer;
     std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Container> _root;
     std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Label> _title_label;
     std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Container> _viewport;
@@ -271,6 +291,7 @@ private:
     bool _fullscreen       = false;
     bool _is_gif           = false;
     bool _is_jpeg          = false;
+    bool _is_bmp           = false;
     bool _preview_loaded   = false;
 
     int32_t viewportWidth() const

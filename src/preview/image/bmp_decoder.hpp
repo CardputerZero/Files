@@ -1,10 +1,9 @@
 #pragma once
 
 #include "preview/image/draw_buffer.hpp"
-#include <string>
 
 namespace files {
 
-DrawBufferPtr decodeJpegFile(const std::string& path);
+DrawBufferPtr decodeBmpFile(const std::string& path);
 
 }  // namespace files

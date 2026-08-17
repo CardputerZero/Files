@@ -107,13 +107,6 @@ int writeOutput(JDEC* decoder, void* pixels, JRECT* area)
 
 }  // namespace
 
-void DrawBufferDeleter::operator()(lv_draw_buf_t* buffer) const noexcept
-{
-    if (buffer != nullptr) {
-        lv_draw_buf_destroy(buffer);
-    }
-}
-
 DrawBufferPtr decodeJpegFile(const std::string& path)
 {
     FilePtr file(std::fopen(path.c_str(), "rb"));
