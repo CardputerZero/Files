@@ -7,6 +7,7 @@
 #include <lvgl/lvgl_cpp/label.hpp>
 #include <lvgl/lvgl_cpp/obj.hpp>
 #include <string_view>
+#include <utility>
 
 namespace files {
 namespace {
@@ -81,7 +82,11 @@ std::string readTextContent(const FileEntry& file)
 
 class TextPreviewPage : public PreviewPage {
 public:
-    explicit TextPreviewPage(const FileEntry& file) : _file(file), _title(file.name), _content(readTextContent(file))
+    TextPreviewPage(std::string title, std::string content) : _title(std::move(title)), _content(std::move(content))
+    {
+    }
+
+    explicit TextPreviewPage(const FileEntry& file) : TextPreviewPage(file.name, readTextContent(file))
     {
     }
 
@@ -170,7 +175,6 @@ public:
     }
 
 private:
-    FileEntry _file;
     std::string _title;
     std::string _content;
     std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Container> _root;
@@ -336,6 +340,11 @@ public:
 std::unique_ptr<PreviewSupport> createTextPreviewSupport()
 {
     return std::make_unique<TextPreviewSupport>();
+}
+
+std::unique_ptr<PreviewPage> createTextPreviewPage(std::string title, std::string content)
+{
+    return std::make_unique<TextPreviewPage>(std::move(title), std::move(content));
 }
 
 }  // namespace files

@@ -1,6 +1,7 @@
 #include "core/files_app.hpp"
 
 #include "assets/font_assets.hpp"
+#include "preview/text/text_preview.hpp"
 #include <lvgl.h>
 #include <spdlog/spdlog.h>
 #include <utility>
@@ -89,6 +90,10 @@ FilesApp::FilesApp(FilesConfig config)
 
 FilesApp::~FilesApp()
 {
+    if (_help_page) {
+        _help_page->detach();
+        _help_page.reset();
+    }
     if (_route_observer_id != 0) {
         _router.currentPage().removeObserver(_route_observer_id);
     }
@@ -106,11 +111,30 @@ void FilesApp::start()
     lv_obj_set_style_bg_opa(lv_screen_active(), LV_OPA_COVER, LV_PART_MAIN);
     setupInputGroup();
     _route_observer_id = _router.currentPage().observe(this, onRouteChanged);
+    _help_active       = false;
     setCurrentPage(_router.page());
 }
 
 void FilesApp::onKey(uint32_t key)
 {
+    if (key == files_key::Help) {
+        if (_help_active) {
+            closeHelpPage();
+        } else if (!textInputFocused()) {
+            showHelpPage();
+        }
+        return;
+    }
+
+    if (_help_active) {
+        if (key == files_key::Left || key == '\x1b') {
+            closeHelpPage();
+        } else if (_help_page) {
+            _help_page->onKey(key, _router);
+        }
+        return;
+    }
+
     if (_current_vm) {
         _current_vm->onKey(key);
     }
@@ -123,6 +147,45 @@ void FilesApp::onLvglKey(uint32_t lv_key, const char* utf8)
 
 bool FilesApp::onLvglKeyState(uint32_t lv_key, const char* utf8, bool pressed)
 {
+    bool desktop_help = false;
+#if LV_USE_SDL
+    desktop_help = (lv_key == 'h' || lv_key == 'H') && !textInputFocused();
+#endif
+    if (lv_key == files_key::Help || desktop_help) {
+        if (pressed) {
+            onKey(files_key::Help);
+        }
+        return true;
+    }
+
+    if (_help_active) {
+        if (lv_key == LV_KEY_ESC || lv_key == LV_KEY_LEFT || lv_key == '\x1b') {
+            if (pressed) {
+                closeHelpPage();
+            }
+            return true;
+        }
+
+        uint32_t help_key = 0;
+        if (lv_key == LV_KEY_UP || lv_key == files_key::Up) {
+            help_key = files_key::Up;
+        } else if (lv_key == LV_KEY_DOWN || lv_key == files_key::Down) {
+            help_key = files_key::Down;
+        } else if (utf8 && (utf8[0] == 'f' || utf8[0] == 'F')) {
+            help_key = files_key::Up;
+        } else if (utf8 && (utf8[0] == 'x' || utf8[0] == 'X')) {
+            help_key = files_key::Down;
+        }
+
+        if (help_key != 0 && _help_page) {
+            _help_page->onKeyState(help_key, pressed, _router);
+            if (pressed) {
+                _help_page->onKey(help_key, _router);
+            }
+        }
+        return true;
+    }
+
     if (lv_key == LV_KEY_ESC) {
         if (pressed && !_esc_pressed) {
             _esc_pressed       = true;
@@ -259,6 +322,9 @@ void FilesApp::tick(uint32_t nowMs)
         _esc_long_consumed = true;
         _quit_requested    = true;
     }
+    if (_help_page) {
+        _help_page->tick(nowMs);
+    }
     if (_current_vm) {
         _current_vm->tick(nowMs);
     }
@@ -269,7 +335,41 @@ void FilesApp::tick(uint32_t nowMs)
 
 bool FilesApp::hostRenderingSuspended() const
 {
+    if (_help_active) {
+        return false;
+    }
     return _current_vm && _current_vm->suspendsHostRendering();
+}
+
+void FilesApp::showHelpPage()
+{
+    if (_help_active || textInputFocused()) {
+        return;
+    }
+
+    _help_page = createTextPreviewPage("Help",
+                                       "Browse and edit file directories, and preview supported file formats.\n\n"
+                                       "F / X / OK / ESC: navigation\n"
+                                       "TAB: menu");
+    if (!_help_page) {
+        spdlog::error("FilesApp: failed to create help page");
+        return;
+    }
+
+    _help_page->attach(lv_screen_active());
+    _help_active = true;
+}
+
+void FilesApp::closeHelpPage()
+{
+    if (!_help_active) {
+        return;
+    }
+    if (_help_page) {
+        _help_page->detach();
+        _help_page.reset();
+    }
+    _help_active = false;
 }
 
 ViewModel* FilesApp::viewModelFor(PageId page)

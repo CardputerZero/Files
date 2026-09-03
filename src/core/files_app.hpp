@@ -3,6 +3,7 @@
 #include "core/files_config.hpp"
 #include "core/files_router.hpp"
 #include "models/files_model.hpp"
+#include "preview/preview_support.hpp"
 #include "view_models/browser_view_model.hpp"
 #include "view_models/preview_view_model.hpp"
 #include "views/browser_view.hpp"
@@ -10,6 +11,7 @@
 #include "views/view.hpp"
 #include <array>
 #include <lvgl.h>
+#include <memory>
 #include <utility>
 
 namespace files {
@@ -42,6 +44,7 @@ private:
     PreviewViewModel _preview_vm;
     BrowserView _browser_view;
     PreviewView _preview_view;
+    std::unique_ptr<PreviewPage> _help_page;
     ViewModel* _current_vm    = nullptr;
     View* _current_view       = nullptr;
     lv_group_t* _input_group  = nullptr;
@@ -51,6 +54,7 @@ private:
     bool _esc_pressed         = false;
     bool _esc_long_consumed   = false;
     uint32_t _esc_pressed_at  = 0;
+    bool _help_active         = false;
 
     std::array<ViewModel*, 2> _view_models;
     std::array<View*, 2> _views;
@@ -59,6 +63,8 @@ private:
     View* viewFor(PageId page);
     void setupInputGroup();
     void setCurrentPage(PageId page);
+    void showHelpPage();
+    void closeHelpPage();
     static void onRouteChanged(void* context, const PageId& page);
     static void onKeyboardEvent(lv_event_t* event);
 };

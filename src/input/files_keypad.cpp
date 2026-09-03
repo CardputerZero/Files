@@ -1,5 +1,6 @@
 #include "input/files_keypad.hpp"
 
+#include "core/files_types.hpp"
 #include <spdlog/spdlog.h>
 #include <cstdio>
 #include <cstdlib>
@@ -44,7 +45,8 @@ bool hasAppKeys(int fd)
            testBit(key_bits, KEY_A) || testBit(key_bits, KEY_BACKSPACE) || testBit(key_bits, KEY_0) ||
            testBit(key_bits, KEY_TAB) || testBit(key_bits, KEY_1) || testBit(key_bits, KEY_2) ||
            testBit(key_bits, KEY_3) || testBit(key_bits, KEY_4) || testBit(key_bits, KEY_5) ||
-           testBit(key_bits, KEY_6) || testBit(key_bits, KEY_7) || testBit(key_bits, KEY_8) || testBit(key_bits, KEY_9);
+           testBit(key_bits, KEY_6) || testBit(key_bits, KEY_7) || testBit(key_bits, KEY_8) ||
+           testBit(key_bits, KEY_9) || testBit(key_bits, KEY_HELP);
 }
 
 bool envEnabled(const char* name, bool fallback)
@@ -320,6 +322,11 @@ uint32_t FilesKeypad::translateKey(uint16_t code) const
 {
 #if !LV_USE_SDL && defined(__linux__)
     const bool shifted = shiftPressed();
+
+    if (code == KEY_HELP) {
+        return files_key::Help;
+    }
+
     if (const uint32_t mapped_character = _cardputer_keymap.characterFor(code)) {
         return mapped_character;
     }
