@@ -1,5 +1,7 @@
 #include "preview/image/jpeg_decoder.hpp"
 
+#include "preview/image/regular_file.hpp"
+
 #include <spdlog/spdlog.h>
 #include <tjpgd.h>
 #include <array>
@@ -109,7 +111,7 @@ int writeOutput(JDEC* decoder, void* pixels, JRECT* area)
 
 DrawBufferPtr decodeJpegFile(const std::string& path)
 {
-    FilePtr file(std::fopen(path.c_str(), "rb"));
+    FilePtr file(openRegularFile(path));
     if (!file) {
         spdlog::warn("ImagePreview: cannot open JPEG path='{}': {}", path, std::strerror(errno));
         return {};

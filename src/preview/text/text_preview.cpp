@@ -3,6 +3,16 @@
 #include "assets/assets.h"
 #include "assets/font_assets.hpp"
 #include <algorithm>
+#if defined(__unix__) || defined(__APPLE__)
+#include <cerrno>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+#ifndef O_CLOEXEC
+#define O_CLOEXEC 0
+#endif
+#endif
 #include <fstream>
 #include <lvgl/lvgl_cpp/label.hpp>
 #include <lvgl/lvgl_cpp/obj.hpp>
@@ -20,6 +30,7 @@ constexpr int32_t kTextPanelH           = kScreenHeight;
 constexpr int32_t kTextPaddingX         = 10;
 constexpr int32_t kTextPaddingY         = 8;
 constexpr int32_t kScrollStep           = 28;
+constexpr int32_t kPageScrollStep       = 128;
 constexpr int32_t kScrollbarX           = 314;
 constexpr int32_t kScrollbarY           = kTextPanelY + 7;
 constexpr int32_t kScrollbarW           = 2;
@@ -63,8 +74,93 @@ bool looksLikeTextBytes(const std::string& sample)
     return suspicious * 100 / sample.size() < 5;
 }
 
+bool readTextSample(const FileEntry& file, std::string& sample)
+{
+#if defined(__unix__) || defined(__APPLE__)
+    // Use the same non-blocking/fstat protection as the full preview read.
+    // The type sniff runs before the preview page is constructed and must not
+    // be able to block on a FIFO or device node if the path changes mid-check.
+    const int fd = ::open(file.path.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    if (fd < 0) {
+        return false;
+    }
+
+    struct stat stat_buffer {};
+    if (::fstat(fd, &stat_buffer) != 0 || !S_ISREG(stat_buffer.st_mode)) {
+        ::close(fd);
+        return false;
+    }
+
+    sample.assign(kTextSniffBytes, '\0');
+    size_t offset = 0;
+    while (offset < sample.size()) {
+        const ssize_t bytes_read = ::read(fd, sample.data() + offset, sample.size() - offset);
+        if (bytes_read > 0) {
+            offset += static_cast<size_t>(bytes_read);
+            continue;
+        }
+        if (bytes_read < 0 && errno == EINTR) {
+            continue;
+        }
+        break;
+    }
+    sample.resize(offset);
+    ::close(fd);
+    return true;
+#else
+    std::ifstream stream(file.path, std::ios::binary);
+    if (!stream) {
+        return false;
+    }
+    sample.assign(kTextSniffBytes, '\0');
+    stream.read(sample.data(), static_cast<std::streamsize>(sample.size()));
+    sample.resize(static_cast<size_t>(stream.gcount()));
+    return true;
+#endif
+}
+
 std::string readTextContent(const FileEntry& file)
 {
+#if defined(__unix__) || defined(__APPLE__)
+    // Open non-blocking and verify the node after opening as well.  The status
+    // check in supports() protects the normal path, while this second check
+    // closes the replacement race for a node swapped in between selection and
+    // preview creation.
+    const int fd = ::open(file.path.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    if (fd < 0) {
+        return "Read failed";
+    }
+
+    struct stat stat_buffer {};
+    if (::fstat(fd, &stat_buffer) != 0 || !S_ISREG(stat_buffer.st_mode)) {
+        ::close(fd);
+        return "Read failed";
+    }
+
+    const uint64_t file_size = stat_buffer.st_size > 0 ? static_cast<uint64_t>(stat_buffer.st_size) : 0;
+    const uint64_t limit     = std::min(file_size, kMaxPreviewBytes);
+    std::string content(static_cast<size_t>(limit), '\0');
+    size_t offset = 0;
+    while (offset < content.size()) {
+        const ssize_t bytes_read = ::read(fd, content.data() + offset, content.size() - offset);
+        if (bytes_read > 0) {
+            offset += static_cast<size_t>(bytes_read);
+            continue;
+        }
+        if (bytes_read < 0 && errno == EINTR) {
+            continue;
+        }
+        // Regular files should not return EAGAIN, but treating it as a short
+        // read keeps the preview bounded if a nonstandard filesystem does.
+        break;
+    }
+    ::close(fd);
+    content.resize(offset);
+    if (file_size > kMaxPreviewBytes) {
+        content += "\n\n...";
+    }
+    return content;
+#else
     std::ifstream stream(file.path, std::ios::binary);
     if (!stream) {
         return "Read failed";
@@ -78,6 +174,7 @@ std::string readTextContent(const FileEntry& file)
         content += "\n\n...";
     }
     return content;
+#endif
 }
 
 class TextPreviewPage : public PreviewPage {
@@ -135,6 +232,12 @@ public:
                 break;
             case files_key::Down:
                 scroll(-1);
+                break;
+            case files_key::PageUp:
+                scrollBy(kPageScrollStep, LV_ANIM_OFF);
+                break;
+            case files_key::PageDown:
+                scrollBy(-kPageScrollStep, LV_ANIM_OFF);
                 break;
             default:
                 break;
@@ -296,8 +399,13 @@ private:
 
     void scroll(int direction, lv_anim_enable_t anim)
     {
-        if (_panel && direction != 0) {
-            _panel->scrollByBounded(0, direction * kScrollStep, anim);
+        scrollBy(direction * kScrollStep, anim);
+    }
+
+    void scrollBy(int32_t distance, lv_anim_enable_t anim)
+    {
+        if (_panel && distance != 0) {
+            _panel->scrollByBounded(0, distance, anim);
             refreshScrollbar();
         }
     }
@@ -312,25 +420,25 @@ public:
 
     bool supports(const FileEntry& file) const override
     {
-        if (file.directory) {
+        if (!isRegularPreviewFile(file)) {
             return false;
         }
         if (file.kind == FileKind::Text || extensionUsuallyText(file.extension)) {
             return true;
         }
 
-        std::ifstream stream(file.path, std::ios::binary);
-        if (!stream) {
+        std::string sample;
+        if (!readTextSample(file, sample)) {
             return false;
         }
-        std::string sample(kTextSniffBytes, '\0');
-        stream.read(sample.data(), static_cast<std::streamsize>(sample.size()));
-        sample.resize(static_cast<size_t>(stream.gcount()));
         return looksLikeTextBytes(sample);
     }
 
     std::unique_ptr<PreviewPage> open(const FileEntry& file) const override
     {
+        if (!isRegularPreviewFile(file)) {
+            return nullptr;
+        }
         return std::make_unique<TextPreviewPage>(file);
     }
 };

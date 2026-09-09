@@ -23,6 +23,8 @@ constexpr BrowserAction kPasteOnlyActions[] = {
 
 constexpr uint32_t kHoldRepeatDelayMs = 320;
 constexpr uint32_t kHoldRepeatMs      = 90;
+// Leave one row of context when paging through the five-row browser window.
+constexpr int kBrowserPageStep = 4;
 
 }  // namespace
 
@@ -102,7 +104,12 @@ void BrowserViewModel::onKey(uint32_t key)
         case files_key::Down:
             _model.browser().selectNext();
             break;
-        case files_key::Left:
+        case files_key::PageUp:
+            _model.browser().selectPageUp(kBrowserPageStep);
+            break;
+        case files_key::PageDown:
+            _model.browser().selectPageDown(kBrowserPageStep);
+            break;
         case '\x1b':
             _model.browser().goBack();
             break;
@@ -216,6 +223,9 @@ void BrowserViewModel::openSelected()
     if (!openedFile.path.empty()) {
         if (_model.preview().open(openedFile)) {
             _router.push(PageId::Preview);
+        } else {
+            _model.browser().status().set("No preview available");
+            spdlog::info("BrowserViewModel: no preview support for path='{}'", openedFile.path);
         }
     }
 }
@@ -257,6 +267,7 @@ void BrowserViewModel::pasteCopiedToCurrentDirectory()
         return;
     }
 
+    const std::string pastedName = _pending_copy.file.name;
     const auto result =
         _pending_copy.cut ? _model.browser().moveEntryTo(_pending_copy.file, _model.browser().currentDirectory().get())
                           : _model.browser().copyEntryTo(_pending_copy.file, _model.browser().currentDirectory().get());
@@ -264,6 +275,7 @@ void BrowserViewModel::pasteCopiedToCurrentDirectory()
         _model.browser().status().set(result.message);
         return;
     }
+    _model.browser().status().set("Pasted " + pastedName);
     if (_pending_copy.cut) {
         _pending_copy = PendingCopyFile{};
     }

@@ -29,30 +29,32 @@ int main()
     smooth_ui_toolkit::ui_hal::on_get_tick([]() { return lv_tick_get(); });
     smooth_ui_toolkit::ui_hal::on_delay([](uint32_t ms) { usleep(ms * 1000); });
 
-    files::FilesApp app;
+    {
+        files::FilesApp app;
 
 #if !LV_USE_SDL
-    files::FilesKeypad keypad;
-    keypad.setKeyCallback(
-        [&app](uint32_t key, const char* utf8, bool pressed) { return app.onLvglKeyState(key, utf8, pressed); });
-    keypad.openDefault();
+        files::FilesKeypad keypad;
+        keypad.setKeyCallback(
+            [&app](uint32_t key, const char* utf8, bool pressed) { return app.onLvglKeyState(key, utf8, pressed); });
+        keypad.openDefault();
 #endif
 
-    app.start();
-    lv_obj_invalidate(lv_screen_active());
+        app.start();
+        lv_obj_invalidate(lv_screen_active());
 
-    while (!app.quitRequested()) {
+        while (!app.quitRequested()) {
 #if !LV_USE_SDL
-        keypad.poll();
+            keypad.poll();
 #endif
-        if (!app.hostRenderingSuspended()) {
-            lv_timer_handler();
+            if (!app.hostRenderingSuspended()) {
+                lv_timer_handler();
+            }
+            app.tick(lv_tick_get());
+            usleep(10000);
         }
-        app.tick(lv_tick_get());
-        usleep(10000);
-    }
 
-    spdlog::info("Files: exit requested");
+        spdlog::info("Files: exit requested");
+    }
     files::shutdownLvglHal();
     return 0;
 }

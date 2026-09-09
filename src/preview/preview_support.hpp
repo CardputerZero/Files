@@ -9,6 +9,11 @@
 
 namespace files {
 
+// Preview decoders must never consume device, FIFO, socket, or other special
+// nodes.  Besides not being meaningful previews, reads from those nodes can
+// block indefinitely (for example /dev/input/event*).
+bool isRegularPreviewFile(const FileEntry& file);
+
 class PreviewPage {
 public:
     virtual ~PreviewPage() = default;

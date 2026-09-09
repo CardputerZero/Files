@@ -1,5 +1,7 @@
 #include "models/file_preview_model.hpp"
 
+#include <spdlog/spdlog.h>
+
 namespace files {
 
 FilePreviewModel::FilePreviewModel()
@@ -8,6 +10,12 @@ FilePreviewModel::FilePreviewModel()
 
 bool FilePreviewModel::open(const FileEntry& file)
 {
+    if (!isRegularPreviewFile(file)) {
+        spdlog::info("FilePreviewModel: refusing non-regular preview path='{}'", file.path);
+        close();
+        return false;
+    }
+
     _page = _registry.open(file);
     _page_observable.set(_page.get());
     return _page != nullptr;

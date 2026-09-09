@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(M5CardputerZeroFiles VERSION 0.1.8 LANGUAGES C CXX ASM)
+project(M5CardputerZeroFiles VERSION 0.1.9 LANGUAGES C CXX ASM)
 
 option(FILES_USE_SDL "Use LVGL's SDL backend for desktop testing" ON)
 option(FILES_CONVERT_ASSETS "Convert image assets during CMake configure" ON)
@@ -183,6 +183,10 @@ target_include_directories(${FILES_BIN_NAME} PRIVATE
     "${FILES_LVGL_DIR}/src/libs/tjpgd"
 )
 
+if(FILES_USE_SDL AND SDL2_INCLUDE_DIRS)
+    target_include_directories(${FILES_BIN_NAME} SYSTEM PRIVATE ${SDL2_INCLUDE_DIRS})
+endif()
+
 target_compile_definitions(${FILES_BIN_NAME} PRIVATE
     FILES_USE_SDL=$<IF:$<BOOL:${FILES_USE_SDL}>,1,0>
 )
@@ -223,6 +227,24 @@ if(BUILD_TESTING)
         Threads::Threads
     )
     add_test(NAME filesystem_transfer COMMAND filesystem_transfer_tests)
+
+    add_executable(file_browser_model_tests
+        tests/file_browser_model_test.cpp
+        src/core/files_config.cpp
+        src/core/files_types.cpp
+        src/models/file_browser_model.cpp
+        src/models/file_type_registry.cpp
+        src/models/filesystem_transfer.cpp
+    )
+    target_include_directories(file_browser_model_tests PRIVATE
+        "${FILES_SRC_DIR}"
+    )
+    target_link_libraries(file_browser_model_tests PRIVATE
+        smooth_ui_toolkit
+        spdlog::spdlog
+        Threads::Threads
+    )
+    add_test(NAME file_browser_model COMMAND file_browser_model_tests)
 
     add_executable(jpeg_decoder_tests
         tests/jpeg_decoder_test.cpp

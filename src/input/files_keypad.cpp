@@ -46,7 +46,8 @@ bool hasAppKeys(int fd)
            testBit(key_bits, KEY_TAB) || testBit(key_bits, KEY_1) || testBit(key_bits, KEY_2) ||
            testBit(key_bits, KEY_3) || testBit(key_bits, KEY_4) || testBit(key_bits, KEY_5) ||
            testBit(key_bits, KEY_6) || testBit(key_bits, KEY_7) || testBit(key_bits, KEY_8) ||
-           testBit(key_bits, KEY_9) || testBit(key_bits, KEY_HELP);
+           testBit(key_bits, KEY_9) || testBit(key_bits, KEY_PAGEUP) || testBit(key_bits, KEY_PAGEDOWN) ||
+           testBit(key_bits, KEY_HELP);
 }
 
 bool envEnabled(const char* name, bool fallback)
@@ -353,6 +354,10 @@ uint32_t FilesKeypad::translateKey(uint16_t code) const
             return LV_KEY_LEFT;
         case KEY_RIGHT:
             return LV_KEY_RIGHT;
+        case KEY_PAGEUP:
+            return files_key::PageUp;
+        case KEY_PAGEDOWN:
+            return files_key::PageDown;
         case KEY_A:
             return shifted ? 'A' : 'a';
         case KEY_B:

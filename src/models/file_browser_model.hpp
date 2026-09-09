@@ -38,6 +38,8 @@ public:
     void refresh(bool preserveSelected = true);
     void selectPrevious();
     void selectNext();
+    void selectPageUp(int pageSize);
+    void selectPageDown(int pageSize);
     FileOperationResult openSelected(FileEntry* openedFile = nullptr);
     FileOperationResult goBack();
     FileOperationResult goToDirectory(const std::string& path, bool pushHistory = true);
@@ -61,8 +63,9 @@ private:
     std::vector<HistoryEntry> _history;
 
     FileEntry makeEntry(const std::filesystem::directory_entry& item, bool includeMetadata) const;
+    FileOperationResult readDirectoryEntries(const std::string& directory, std::vector<FileEntry>& entries) const;
     void setEntries(std::vector<FileEntry> entries, const std::string& preferredPath);
-    void refreshSelecting(const std::string& preferredPath);
+    FileOperationResult refreshSelecting(const std::string& preferredPath);
     FileOperationResult goToDirectory(const std::string& path, bool pushHistory, const std::string& preferredPath);
 };
 

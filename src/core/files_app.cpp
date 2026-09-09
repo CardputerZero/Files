@@ -4,6 +4,9 @@
 #include "preview/text/text_preview.hpp"
 #include <lvgl.h>
 #include <spdlog/spdlog.h>
+#if LV_USE_SDL
+#include LV_SDL_INCLUDE_PATH
+#endif
 #include <utility>
 
 namespace files {
@@ -90,6 +93,14 @@ FilesApp::FilesApp(FilesConfig config)
 
 FilesApp::~FilesApp()
 {
+#if LV_USE_SDL
+    if (_sdl_event_watch_installed) {
+        SDL_DelEventWatch(&FilesApp::onSdlEvent, this);
+        _sdl_event_watch_installed = false;
+        std::lock_guard<std::mutex> lock(_sdl_page_keys_mutex);
+        _sdl_page_keys.clear();
+    }
+#endif
     if (_help_page) {
         _help_page->detach();
         _help_page.reset();
@@ -110,6 +121,16 @@ void FilesApp::start()
     lv_obj_set_style_bg_color(lv_screen_active(), lv_color_hex(0x000000), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(lv_screen_active(), LV_OPA_COVER, LV_PART_MAIN);
     setupInputGroup();
+#if LV_USE_SDL
+    if (!_sdl_event_watch_installed) {
+        {
+            std::lock_guard<std::mutex> lock(_sdl_page_keys_mutex);
+            _sdl_page_keys.clear();
+        }
+        SDL_AddEventWatch(&FilesApp::onSdlEvent, this);
+        _sdl_event_watch_installed = true;
+    }
+#endif
     _route_observer_id = _router.currentPage().observe(this, onRouteChanged);
     _help_active       = false;
     setCurrentPage(_router.page());
@@ -166,11 +187,35 @@ bool FilesApp::onLvglKeyState(uint32_t lv_key, const char* utf8, bool pressed)
             return true;
         }
 
+#if LV_USE_SDL
+        // Consume the raw marker for both LV_KEY_PREV and LV_KEY_NEXT while
+        // help is open.  PageDown and Tab share LV_KEY_NEXT in LVGL's SDL
+        // driver; leaving a Tab marker behind would misclassify the next key.
+        SdlPageKey sdl_page_key = SdlPageKey::None;
+        if (pressed && (lv_key == LV_KEY_PREV || lv_key == LV_KEY_NEXT)) {
+            sdl_page_key = takeSdlPageKey(lv_key);
+        }
+#endif
+
         uint32_t help_key = 0;
-        if (lv_key == LV_KEY_UP || lv_key == files_key::Up) {
+        if (lv_key == files_key::PageUp) {
+            help_key = files_key::PageUp;
+        } else if (lv_key == files_key::PageDown) {
+            help_key = files_key::PageDown;
+        } else if (lv_key == LV_KEY_PREV) {
+#if LV_USE_SDL
+            help_key = sdl_page_key == SdlPageKey::PageUp ? files_key::PageUp : files_key::Up;
+#else
+            help_key = files_key::PageUp;
+#endif
+        } else if (lv_key == LV_KEY_UP || lv_key == files_key::Up) {
             help_key = files_key::Up;
-        } else if (lv_key == LV_KEY_DOWN || lv_key == files_key::Down) {
-            help_key = files_key::Down;
+        } else if (lv_key == LV_KEY_DOWN || lv_key == files_key::Down
+#if LV_USE_SDL
+                   || (lv_key == LV_KEY_NEXT && sdl_page_key == SdlPageKey::PageDown)
+#endif
+        ) {
+            help_key = (lv_key == LV_KEY_NEXT) ? files_key::PageDown : files_key::Down;
         } else if (utf8 && (utf8[0] == 'f' || utf8[0] == 'F')) {
             help_key = files_key::Up;
         } else if (utf8 && (utf8[0] == 'x' || utf8[0] == 'X')) {
@@ -212,8 +257,31 @@ bool FilesApp::onLvglKeyState(uint32_t lv_key, const char* utf8, bool pressed)
         return true;
     }
 
-    if (lv_key == LV_KEY_NEXT || lv_key == LV_KEY_PREV) {
+    // LVGL's SDL driver maps Tab and PageDown to the same LV_KEY_NEXT value.
+    // The raw SDL event watcher records which key generated the event so the
+    // two actions remain distinct without changing the vendored LVGL driver.
+#if LV_USE_SDL
+    SdlPageKey sdl_page_key = SdlPageKey::Tab;
+    if (pressed && (lv_key == LV_KEY_NEXT || lv_key == LV_KEY_PREV)) {
+        sdl_page_key = takeSdlPageKey(lv_key);
+    }
+#endif
+
+    if (lv_key == LV_KEY_PREV) {
         if (pressed) {
+            onKey(files_key::PageUp);
+        }
+        return true;
+    }
+
+    if (lv_key == LV_KEY_NEXT) {
+        if (pressed) {
+#if LV_USE_SDL
+            if (sdl_page_key == SdlPageKey::PageDown) {
+                onKey(files_key::PageDown);
+                return true;
+            }
+#endif
             onKey('\t');
         }
         return true;
@@ -230,6 +298,12 @@ bool FilesApp::onLvglKeyState(uint32_t lv_key, const char* utf8, bool pressed)
 #endif
 
     switch (lv_key) {
+        case files_key::PageUp:
+        case files_key::PageDown:
+            if (pressed) {
+                onKey(lv_key);
+            }
+            return true;
         case LV_KEY_UP:
             if (_current_vm) {
                 _current_vm->onKeyState(files_key::Up, pressed);
@@ -350,7 +424,8 @@ void FilesApp::showHelpPage()
     _help_page = createTextPreviewPage("Help",
                                        "Browse and edit file directories, and preview supported file formats.\n\n"
                                        "F / X / OK / ESC: navigation\n"
-                                       "TAB: menu");
+                                       "TAB: menu\n"
+                                       "PgUp / PgDn: page");
     if (!_help_page) {
         spdlog::error("FilesApp: failed to create help page");
         return;
@@ -461,5 +536,64 @@ void FilesApp::onKeyboardEvent(lv_event_t* event)
         lv_event_get_code(event) == LV_EVENT_KEY && lv_indev_get_state(indev) == LV_INDEV_STATE_PRESSED;
     self->onLvglKeyState(key, utf8, pressed);
 }
+
+#if LV_USE_SDL
+int FilesApp::onSdlEvent(void* userdata, SDL_Event* event)
+{
+    auto* self = static_cast<FilesApp*>(userdata);
+    if (!self || !event || event->type != SDL_KEYDOWN) {
+        return 0;
+    }
+
+    SdlPageKey page_key = SdlPageKey::None;
+    if (event->key.keysym.sym == SDLK_TAB) {
+        page_key = SdlPageKey::Tab;
+    } else if (event->key.keysym.sym == SDLK_PAGEUP) {
+        page_key = SdlPageKey::PageUp;
+    } else if (event->key.keysym.sym == SDLK_PAGEDOWN) {
+        page_key = SdlPageKey::PageDown;
+    }
+
+    std::lock_guard<std::mutex> lock(self->_sdl_page_keys_mutex);
+    if (page_key == SdlPageKey::None) {
+        // Keep navigation markers queued across ordinary key events.  SDL
+        // invokes event watchers when events are pushed, while LVGL consumes
+        // them later from its timer; clearing here would lose a valid page
+        // key whenever a letter or arrow was queued before that timer ran.
+        return 0;
+    }
+
+    // The SDL LVGL driver normally queues and dispatches one key immediately,
+    // but retain a short FIFO for repeated key presses in one event pass.
+    constexpr size_t kMaxPendingPageKeys = 32;
+    if (self->_sdl_page_keys.size() >= kMaxPendingPageKeys) {
+        self->_sdl_page_keys.pop_front();
+    }
+    self->_sdl_page_keys.push_back(page_key);
+    return 0;
+}
+
+FilesApp::SdlPageKey FilesApp::takeSdlPageKey(uint32_t lvKey)
+{
+    std::lock_guard<std::mutex> lock(_sdl_page_keys_mutex);
+    if (_sdl_page_keys.empty()) {
+        return SdlPageKey::None;
+    }
+
+    const SdlPageKey key = _sdl_page_keys.front();
+    const bool matches   = (lvKey == LV_KEY_PREV && key == SdlPageKey::PageUp) ||
+                         (lvKey == LV_KEY_NEXT && (key == SdlPageKey::Tab || key == SdlPageKey::PageDown));
+    if (!matches) {
+        // A marker can only become out of sync if LVGL dropped an input event
+        // or another input device delivered a control key. Discard it rather
+        // than allowing a later Tab/PageDown to trigger the wrong action.
+        _sdl_page_keys.clear();
+        return SdlPageKey::None;
+    }
+
+    _sdl_page_keys.pop_front();
+    return key;
+}
+#endif
 
 }  // namespace files

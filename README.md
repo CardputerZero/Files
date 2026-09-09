@@ -111,9 +111,9 @@ On hardware, `F`/`X`/`Z`/`C` are accepted as Up/Down/Left/Right.
 
 Key controls:
 
-- Browser page: Up/Down select, Enter open, Tab action menu, Esc or Left back
+- Browser page: Up/Down select, PgUp/PgDn page, Enter open, Tab action menu, Esc back
 - Action menu: Up/Down select, Enter confirm, Esc/Left/Tab close
-- Text preview: Up/Down scroll, Esc or Left back
+- Text preview: Up/Down scroll, PgUp/PgDn page, Esc or Left back
 - Help: `Fn+H` on CardputerZero (`H` on desktop) opens the text help page; Esc or `Fn+H` closes it
 - Image preview: arrows pan, `4` fullscreen, `5` zoom out, `7` zoom in, `8` rotate left, Esc back
 - Audio preview: `5` back 10s, `6` play/pause, `7` forward 10s, `8` speed, Esc/Left back

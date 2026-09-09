@@ -419,7 +419,7 @@ public:
 
     bool supports(const FileEntry& file) const override
     {
-        if (file.directory) {
+        if (!isRegularPreviewFile(file)) {
             return false;
         }
         return file.kind == FileKind::Video || extensionUsuallyVideo(file.extension);
@@ -427,6 +427,9 @@ public:
 
     std::unique_ptr<PreviewPage> open(const FileEntry& file) const override
     {
+        if (!isRegularPreviewFile(file)) {
+            return nullptr;
+        }
         return std::make_unique<VideoPreviewPage>(file);
     }
 };

@@ -8,11 +8,13 @@ namespace files {
 
 namespace files_key {
 
-constexpr uint32_t Up    = 0x10001;
-constexpr uint32_t Down  = 0x10002;
-constexpr uint32_t Left  = 0x10003;
-constexpr uint32_t Right = 0x10004;
-constexpr uint32_t Help  = 0x10005;
+constexpr uint32_t Up       = 0x10001;
+constexpr uint32_t Down     = 0x10002;
+constexpr uint32_t Left     = 0x10003;
+constexpr uint32_t Right    = 0x10004;
+constexpr uint32_t Help     = 0x10005;
+constexpr uint32_t PageUp   = 0x10006;
+constexpr uint32_t PageDown = 0x10007;
 
 }  // namespace files_key
 

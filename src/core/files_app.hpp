@@ -10,9 +10,17 @@
 #include "views/preview_view.hpp"
 #include "views/view.hpp"
 #include <array>
+#include <deque>
 #include <lvgl.h>
 #include <memory>
+#if LV_USE_SDL
+#include <mutex>
+#endif
 #include <utility>
+
+#if LV_USE_SDL
+#include LV_SDL_INCLUDE_PATH
+#endif
 
 namespace files {
 
@@ -56,6 +64,19 @@ private:
     uint32_t _esc_pressed_at  = 0;
     bool _help_active         = false;
 
+#if LV_USE_SDL
+    enum class SdlPageKey : uint8_t {
+        None,
+        Tab,
+        PageUp,
+        PageDown,
+    };
+
+    std::deque<SdlPageKey> _sdl_page_keys;
+    std::mutex _sdl_page_keys_mutex;
+    bool _sdl_event_watch_installed = false;
+#endif
+
     std::array<ViewModel*, 2> _view_models;
     std::array<View*, 2> _views;
 
@@ -67,6 +88,10 @@ private:
     void closeHelpPage();
     static void onRouteChanged(void* context, const PageId& page);
     static void onKeyboardEvent(lv_event_t* event);
+#if LV_USE_SDL
+    static int onSdlEvent(void* userdata, SDL_Event* event);
+    SdlPageKey takeSdlPageKey(uint32_t lvKey);
+#endif
 };
 
 }  // namespace files

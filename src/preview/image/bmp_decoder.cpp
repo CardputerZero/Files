@@ -1,5 +1,7 @@
 #include "preview/image/bmp_decoder.hpp"
 
+#include "preview/image/regular_file.hpp"
+
 #include <spdlog/spdlog.h>
 #include <algorithm>
 #include <array>
@@ -98,7 +100,7 @@ uint8_t extractChannel(uint32_t pixel, const ChannelMask& channel, uint8_t fallb
 
 DrawBufferPtr decodeBmpFile(const std::string& path)
 {
-    FilePtr file(std::fopen(path.c_str(), "rb"));
+    FilePtr file(openRegularFile(path));
     if (!file) {
         spdlog::warn("ImagePreview: cannot open BMP path='{}': {}", path, std::strerror(errno));
         return {};
@@ -147,6 +149,8 @@ DrawBufferPtr decodeBmpFile(const std::string& path)
         return {};
     }
 
+    const uint64_t mask_bytes = compression == kCompressionBitfields && info_size < 52U ? 12U : 0U;
+
     const uint32_t height =
         static_cast<uint32_t>(signedHeight < 0 ? -static_cast<int64_t>(signedHeight) : signedHeight);
     const bool top_down           = signedHeight < 0;
@@ -160,7 +164,7 @@ DrawBufferPtr decodeBmpFile(const std::string& path)
     const uint64_t decoded_size = decoded_stride * height;
     if (row_size > std::numeric_limits<size_t>::max() || decoded_stride > std::numeric_limits<uint32_t>::max() ||
         decoded_size > std::numeric_limits<uint32_t>::max() || decoded_size > kMaxDecodedBytes ||
-        data_offset < 14U + info_size) {
+        data_offset < 14U + static_cast<uint64_t>(info_size) + mask_bytes) {
         spdlog::warn("ImagePreview: unsupported BMP dimensions path='{}' width={} height={} bytes={}", path, width,
                      height, decoded_size);
         return {};
@@ -238,9 +242,9 @@ DrawBufferPtr decodeBmpFile(const std::string& path)
             auto* out_pixel = destination + static_cast<size_t>(x) * 3U;
             // LVGL's RGB888 draw-buffer format stores channels as B, G, R
             // in memory (the same layout produced by TJpgDec).
-            out_pixel[0]    = blue_value;
-            out_pixel[1]    = green_value;
-            out_pixel[2]    = red_value;
+            out_pixel[0] = blue_value;
+            out_pixel[1] = green_value;
+            out_pixel[2] = red_value;
         }
     }
 

@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
+#include <limits>
 #include <system_error>
 #include <utility>
 
@@ -17,6 +18,30 @@ namespace {
 std::string pathString(const fs::path& path)
 {
     return path.lexically_normal().string();
+}
+
+bool isPreferredEntry(const FileEntry& entry, const std::string& preferredPath)
+{
+    if (preferredPath.empty()) {
+        return false;
+    }
+
+    const fs::path entryPath = fs::path(entry.path).lexically_normal();
+    const fs::path preferred = fs::path(preferredPath).lexically_normal();
+    if (entryPath == preferred) {
+        return true;
+    }
+
+    // Directory entries can be symlinks.  The path used while descending may
+    // be canonicalized through the link, while the entry itself keeps the
+    // link's spelling.  Names are unique within one directory, so a basename
+    // fallback is sufficient, but only when both paths belong to that same
+    // parent.  This avoids selecting an unrelated entry with the same name.
+    if (entryPath.parent_path() != preferred.parent_path()) {
+        return false;
+    }
+    const std::string preferredName = preferred.filename().string();
+    return !preferredName.empty() && entry.name == preferredName;
 }
 
 int64_t modifiedUnixSec(const fs::directory_entry& entry)
@@ -40,6 +65,24 @@ FileOperationResult errorResult(FileOperationStatus status, std::string message)
 bool isPermissionError(const std::error_code& error)
 {
     return error == std::errc::permission_denied || error == std::errc::operation_not_permitted;
+}
+
+bool pathExistsNoFollow(const fs::path& path, bool& exists, std::error_code& error)
+{
+    error.clear();
+    const fs::file_status status = fs::symlink_status(path, error);
+    if (error == std::errc::no_such_file_or_directory) {
+        error.clear();
+        exists = false;
+        return true;
+    }
+    if (error) {
+        exists = false;
+        return false;
+    }
+
+    exists = status.type() != fs::file_type::not_found;
+    return true;
 }
 
 FileOperationResult filesystemError(const char* operation, const std::error_code& error)
@@ -89,33 +132,69 @@ void FileBrowserModel::refresh(bool preserveSelected)
 {
     const FileEntry* selected       = selectedEntry();
     const std::string preferredPath = preserveSelected && selected ? selected->path : "";
-    refreshSelecting(preferredPath);
+    (void)refreshSelecting(preferredPath);
 }
 
-void FileBrowserModel::refreshSelecting(const std::string& preferredPath)
+FileOperationResult FileBrowserModel::readDirectoryEntries(const std::string& directory,
+                                                           std::vector<FileEntry>& entries) const
 {
-    std::vector<FileEntry> list;
+    entries.clear();
     std::error_code ec;
 
-    for (const auto& item :
-         fs::directory_iterator(_current_directory.get(), fs::directory_options::skip_permission_denied, ec)) {
-        list.push_back(makeEntry(item, false));
+    // libstdc++ may silently turn an unreadable directory into an empty
+    // iterator when skip_permission_denied is requested. Probe the directory
+    // itself without that option first so callers can report the real error;
+    // the second iterator still tolerates an inaccessible child entry.
+    {
+        const fs::directory_iterator probe(directory, fs::directory_options::none, ec);
+        if (ec) {
+            const FileOperationResult result = filesystemError("Read", ec);
+            spdlog::warn("FileBrowserModel: failed to open directory {}: {}", directory, ec.message());
+            return result;
+        }
+        (void)probe;
+    }
+    ec.clear();
+
+    for (const auto& item : fs::directory_iterator(directory, fs::directory_options::skip_permission_denied, ec)) {
+        entries.push_back(makeEntry(item, false));
     }
 
     if (ec) {
-        _status.set(isPermissionError(ec) ? "Permission denied" : "Read failed: " + ec.message());
-        spdlog::warn("FileBrowserModel: failed to read {}: {}", _current_directory.get(), ec.message());
-    } else {
-        _status.set(list.empty() ? "Empty folder" : "Ready");
+        const FileOperationResult result = filesystemError("Read", ec);
+        spdlog::warn("FileBrowserModel: failed to read {}: {}", directory, ec.message());
+        std::sort(entries.begin(), entries.end(), [](const FileEntry& lhs, const FileEntry& rhs) {
+            if (lhs.directory != rhs.directory) {
+                return lhs.directory && !rhs.directory;
+            }
+            return lhs.name < rhs.name;
+        });
+        return result;
     }
 
-    std::sort(list.begin(), list.end(), [](const FileEntry& lhs, const FileEntry& rhs) {
+    std::sort(entries.begin(), entries.end(), [](const FileEntry& lhs, const FileEntry& rhs) {
         if (lhs.directory != rhs.directory) {
             return lhs.directory && !rhs.directory;
         }
         return lhs.name < rhs.name;
     });
+    return FileOperationResult{};
+}
+
+FileOperationResult FileBrowserModel::refreshSelecting(const std::string& preferredPath)
+{
+    std::vector<FileEntry> list;
+    const FileOperationResult result = readDirectoryEntries(_current_directory.get(), list);
+    if (!result) {
+        _status.set(result.message);
+        // Keep the last known listing and selection available for retry. A
+        // transient permission or filesystem error should not blank the UI.
+        return result;
+    }
+
+    _status.set(list.empty() ? "Empty folder" : "Ready");
     setEntries(std::move(list), preferredPath);
+    return result;
 }
 
 void FileBrowserModel::selectPrevious()
@@ -126,11 +205,10 @@ void FileBrowserModel::selectPrevious()
         return;
     }
 
-    int next = _selected_index.get() - 1;
-    if (next < 0) {
-        next = static_cast<int>(list.size()) - 1;
-    }
-    _selected_index.set(next);
+    const size_t last    = std::min(list.size() - 1, static_cast<size_t>(std::numeric_limits<int>::max()));
+    const size_t current = _selected_index.get() < 0 ? 0 : std::min(static_cast<size_t>(_selected_index.get()), last);
+    const size_t next    = current == 0 ? last : current - 1;
+    _selected_index.set(static_cast<int>(next));
 }
 
 void FileBrowserModel::selectNext()
@@ -141,11 +219,39 @@ void FileBrowserModel::selectNext()
         return;
     }
 
-    int next = _selected_index.get() + 1;
-    if (next >= static_cast<int>(list.size())) {
-        next = 0;
+    const size_t last    = std::min(list.size() - 1, static_cast<size_t>(std::numeric_limits<int>::max()));
+    const size_t current = _selected_index.get() < 0 ? 0 : std::min(static_cast<size_t>(_selected_index.get()), last);
+    const size_t next    = current >= last ? 0 : current + 1;
+    _selected_index.set(static_cast<int>(next));
+}
+
+void FileBrowserModel::selectPageUp(int pageSize)
+{
+    const auto& list = _entries.get();
+    if (list.empty()) {
+        _selected_index.set(-1);
+        return;
     }
-    _selected_index.set(next);
+
+    const size_t last    = std::min(list.size() - 1, static_cast<size_t>(std::numeric_limits<int>::max()));
+    const size_t current = _selected_index.get() < 0 ? 0 : std::min(static_cast<size_t>(_selected_index.get()), last);
+    const size_t step    = pageSize > 0 ? static_cast<size_t>(pageSize) : 1U;
+    _selected_index.set(static_cast<int>(step >= current ? 0 : current - step));
+}
+
+void FileBrowserModel::selectPageDown(int pageSize)
+{
+    const auto& list = _entries.get();
+    if (list.empty()) {
+        _selected_index.set(-1);
+        return;
+    }
+
+    const size_t last      = std::min(list.size() - 1, static_cast<size_t>(std::numeric_limits<int>::max()));
+    const size_t current   = _selected_index.get() < 0 ? 0 : std::min(static_cast<size_t>(_selected_index.get()), last);
+    const size_t step      = pageSize > 0 ? static_cast<size_t>(pageSize) : 1U;
+    const size_t remaining = last - current;
+    _selected_index.set(static_cast<int>(step >= remaining ? last : current + step));
 }
 
 FileOperationResult FileBrowserModel::openSelected(FileEntry* openedFile)
@@ -156,7 +262,10 @@ FileOperationResult FileBrowserModel::openSelected(FileEntry* openedFile)
     }
 
     if (selected->directory) {
-        return goToDirectory(selected->path, true);
+        // Keep the spelling used by the directory entry in history.  A
+        // symlinked directory is canonicalized for browsing, but returning
+        // should still highlight that exact entry in the parent directory.
+        return goToDirectory(selected->path, true, selected->path);
     }
 
     if (openedFile) {
@@ -168,9 +277,12 @@ FileOperationResult FileBrowserModel::openSelected(FileEntry* openedFile)
 FileOperationResult FileBrowserModel::goBack()
 {
     if (!_history.empty()) {
-        const HistoryEntry previous = std::move(_history.back());
-        _history.pop_back();
-        return goToDirectory(previous.directory, false, previous.selectedPath);
+        const HistoryEntry& previous     = _history.back();
+        const FileOperationResult result = goToDirectory(previous.directory, false, previous.selectedPath);
+        if (result) {
+            _history.pop_back();
+        }
+        return result;
     }
 
     fs::path current(_current_directory.get());
@@ -189,9 +301,14 @@ FileOperationResult FileBrowserModel::goToDirectory(const std::string& path, boo
 FileOperationResult FileBrowserModel::goToDirectory(const std::string& path, bool pushHistory,
                                                     const std::string& preferredPath)
 {
+    fs::path requestedPath(path);
+    if (requestedPath.is_relative()) {
+        requestedPath = fs::path(_current_directory.get()) / requestedPath;
+    }
+
     std::error_code ec;
-    const fs::path target        = fs::weakly_canonical(path, ec);
-    const std::string targetPath = pathString(ec ? fs::path(path) : target);
+    const fs::path target        = fs::weakly_canonical(requestedPath, ec);
+    const std::string targetPath = pathString(ec ? requestedPath : target);
     ec.clear();
     if (!fs::is_directory(targetPath, ec)) {
         if (ec) {
@@ -200,13 +317,21 @@ FileOperationResult FileBrowserModel::goToDirectory(const std::string& path, boo
         return errorResult(FileOperationStatus::NotFound, "Folder not found");
     }
 
+    std::vector<FileEntry> targetEntries;
+    const FileOperationResult readResult = readDirectoryEntries(targetPath, targetEntries);
+    if (!readResult) {
+        _status.set(readResult.message);
+        return readResult;
+    }
+
     const std::string previous = _current_directory.get();
     if (pushHistory && previous != targetPath) {
-        _history.push_back({previous, targetPath});
+        _history.push_back({previous, pathString(requestedPath)});
     }
 
     _current_directory.set(targetPath);
-    refreshSelecting(preferredPath);
+    _status.set(targetEntries.empty() ? "Empty folder" : "Ready");
+    setEntries(std::move(targetEntries), preferredPath);
     return FileOperationResult{};
 }
 
@@ -278,11 +403,12 @@ FileOperationResult FileBrowserModel::renameSelectedTo(const std::string& name)
     if (source == destination) {
         return FileOperationResult{};
     }
-    if (fs::exists(destination, ec)) {
-        return errorResult(FileOperationStatus::Failed, "Name already exists");
-    }
-    if (ec) {
+    bool destinationExists = false;
+    if (!pathExistsNoFollow(destination, destinationExists, ec)) {
         return filesystemError("Rename", ec);
+    }
+    if (destinationExists) {
+        return errorResult(FileOperationStatus::Failed, "Name already exists");
     }
 
     fs::rename(source, destination, ec);
@@ -351,7 +477,7 @@ void FileBrowserModel::setEntries(std::vector<FileEntry> entries, const std::str
     int selected = entries.empty() ? -1 : 0;
     if (!preferredPath.empty()) {
         for (size_t i = 0; i < entries.size(); ++i) {
-            if (entries[i].path == preferredPath) {
+            if (isPreferredEntry(entries[i], preferredPath)) {
                 selected = static_cast<int>(i);
                 break;
             }
