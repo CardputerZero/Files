@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(M5CardputerZeroFiles VERSION 0.1.9 LANGUAGES C CXX ASM)
+project(M5CardputerZeroFiles VERSION 0.1.10 LANGUAGES C CXX ASM)
 
 option(FILES_USE_SDL "Use LVGL's SDL backend for desktop testing" ON)
 option(FILES_CONVERT_ASSETS "Convert image assets during CMake configure" ON)
@@ -285,4 +285,21 @@ if(BUILD_TESTING)
         ${FILES_SYSTEM_LIBS}
     )
     add_test(NAME bmp_decoder COMMAND bmp_decoder_tests)
+
+    add_executable(font_coverage_tests
+        tests/font_coverage_test.cpp
+        src/assets/res_c/font_noto_sans_mono_semibold_12.c
+        src/assets/res_c/font_noto_sans_mono_semibold_14.c
+        src/assets/res_c/font_noto_sans_sc_semibold_10.c
+        src/assets/res_c/font_noto_sans_sc_semibold_12.c
+        src/assets/res_c/font_noto_sans_sc_semibold_14.c
+    )
+    target_include_directories(font_coverage_tests PRIVATE
+        "${FILES_SRC_DIR}"
+    )
+    target_link_libraries(font_coverage_tests PRIVATE
+        lvgl::lvgl
+        ${FILES_SYSTEM_LIBS}
+    )
+    add_test(NAME font_coverage COMMAND font_coverage_tests)
 endif()
