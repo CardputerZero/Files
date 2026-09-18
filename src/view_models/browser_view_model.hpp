@@ -86,6 +86,10 @@ public:
     }
 
     const FileEntry* selectedEntry() const;
+    bool canGoBack() const
+    {
+        return _model.browser().canGoBack();
+    }
     int actionCount() const;
     BrowserAction actionAt(int index) const;
     void openSelected();

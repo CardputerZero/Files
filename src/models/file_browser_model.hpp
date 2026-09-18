@@ -35,6 +35,7 @@ public:
 
     const FileEntry* selectedEntry() const;
     FileEntry entryWithMetadata(const FileEntry& entry) const;
+    bool canGoBack() const;
     void refresh(bool preserveSelected = true);
     void selectPrevious();
     void selectNext();

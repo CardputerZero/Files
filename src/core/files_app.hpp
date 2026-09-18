@@ -53,6 +53,7 @@ private:
     BrowserView _browser_view;
     PreviewView _preview_view;
     std::unique_ptr<PreviewPage> _help_page;
+    lv_obj_t* _exit_hint      = nullptr;
     ViewModel* _current_vm    = nullptr;
     View* _current_view       = nullptr;
     lv_group_t* _input_group  = nullptr;
@@ -61,6 +62,7 @@ private:
     bool _enter_pressed       = false;
     bool _esc_pressed         = false;
     bool _esc_long_consumed   = false;
+    bool _esc_exit_armed      = false;
     uint32_t _esc_pressed_at  = 0;
     bool _help_active         = false;
 
@@ -86,6 +88,11 @@ private:
     void setCurrentPage(PageId page);
     void showHelpPage();
     void closeHelpPage();
+    void createExitHint();
+    void showExitHint();
+    void hideExitHint();
+    void releaseEscPress();
+    bool browserEscapeHandledByView();
     static void onRouteChanged(void* context, const PageId& page);
     static void onKeyboardEvent(lv_event_t* event);
 #if LV_USE_SDL

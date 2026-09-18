@@ -128,6 +128,17 @@ FileEntry FileBrowserModel::entryWithMetadata(const FileEntry& entry) const
     return ec ? entry : makeEntry(item, true);
 }
 
+bool FileBrowserModel::canGoBack() const
+{
+    if (!_history.empty()) {
+        return true;
+    }
+
+    const fs::path current = fs::path(_current_directory.get());
+    const fs::path parent  = current.parent_path();
+    return !parent.empty() && parent != current;
+}
+
 void FileBrowserModel::refresh(bool preserveSelected)
 {
     const FileEntry* selected       = selectedEntry();

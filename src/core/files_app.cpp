@@ -12,7 +12,17 @@
 namespace files {
 namespace {
 
-constexpr uint32_t kEscLongPressMs = 900;
+constexpr uint32_t kEscLongPressMs = 700;
+
+#if LV_USE_SDL
+bool sdlKeyHeld(SDL_Scancode scancode)
+{
+    int key_count      = 0;
+    const Uint8* state = SDL_GetKeyboardState(&key_count);
+    const int index    = static_cast<int>(scancode);
+    return state && index >= 0 && index < key_count && state[index] != 0;
+}
+#endif
 
 lv_obj_t* focusedTextInput()
 {
@@ -101,6 +111,11 @@ FilesApp::~FilesApp()
         _sdl_page_keys.clear();
     }
 #endif
+    hideExitHint();
+    if (_exit_hint && lv_obj_is_valid(_exit_hint)) {
+        lv_obj_delete(_exit_hint);
+    }
+    _exit_hint = nullptr;
     if (_help_page) {
         _help_page->detach();
         _help_page.reset();
@@ -120,6 +135,7 @@ void FilesApp::start()
     initFontAssets();
     lv_obj_set_style_bg_color(lv_screen_active(), lv_color_hex(0x000000), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(lv_screen_active(), LV_OPA_COVER, LV_PART_MAIN);
+    createExitHint();
     setupInputGroup();
 #if LV_USE_SDL
     if (!_sdl_event_watch_installed) {
@@ -152,6 +168,18 @@ void FilesApp::onKey(uint32_t key)
             closeHelpPage();
         } else if (_help_page) {
             _help_page->onKey(key, _router);
+        }
+        return;
+    }
+
+    if (key == '\x1b') {
+        // A short Esc from a preview returns to the browser. On the browser
+        // page, keep walking up the directory tree before reserving Esc for
+        // the app-exit gesture. Menus and dialogs always consume it first.
+        if (_router.page() != PageId::Browser || _browser_vm.canGoBack() || browserEscapeHandledByView()) {
+            if (_current_vm) {
+                _current_vm->onKey(key);
+            }
         }
         return;
     }
@@ -236,12 +264,20 @@ bool FilesApp::onLvglKeyState(uint32_t lv_key, const char* utf8, bool pressed)
             _esc_pressed       = true;
             _esc_pressed_at    = lv_tick_get();
             _esc_long_consumed = false;
-        } else if (!pressed) {
-            if (_esc_pressed && !_esc_long_consumed) {
-                onKey('\x1b');
+            _esc_exit_armed =
+                _router.page() == PageId::Browser && !_browser_vm.canGoBack() && !browserEscapeHandledByView();
+            if (_esc_exit_armed) {
+                showExitHint();
             }
-            _esc_pressed       = false;
-            _esc_long_consumed = false;
+        } else if (!pressed && _esc_pressed) {
+#if LV_USE_SDL
+            // LVGL's SDL driver may synthesize a release while the physical
+            // key is still held. Keep the long-press edge armed in that case.
+            if (sdlKeyHeld(SDL_SCANCODE_ESCAPE)) {
+                return true;
+            }
+#endif
+            releaseEscPress();
         }
         return true;
     }
@@ -392,10 +428,22 @@ bool FilesApp::onLvglKeyState(uint32_t lv_key, const char* utf8, bool pressed)
 
 void FilesApp::tick(uint32_t nowMs)
 {
-    if (_esc_pressed && !_esc_long_consumed && nowMs - _esc_pressed_at >= kEscLongPressMs) {
-        _esc_long_consumed = true;
-        _quit_requested    = true;
+    if (_esc_exit_armed && (_router.page() != PageId::Browser || _help_active || _browser_vm.canGoBack() ||
+                            browserEscapeHandledByView())) {
+        _esc_exit_armed = false;
+        hideExitHint();
     }
+    if (_esc_pressed && !_esc_long_consumed && _esc_exit_armed && nowMs - _esc_pressed_at >= kEscLongPressMs) {
+        _esc_long_consumed = true;
+        hideExitHint();
+        spdlog::info("FilesApp: quit requested after holding Esc for {} ms", kEscLongPressMs);
+        _quit_requested = true;
+    }
+#if LV_USE_SDL
+    if (_esc_pressed && !sdlKeyHeld(SDL_SCANCODE_ESCAPE)) {
+        releaseEscPress();
+    }
+#endif
     if (_help_page) {
         _help_page->tick(nowMs);
     }
@@ -431,6 +479,8 @@ void FilesApp::showHelpPage()
         return;
     }
 
+    _esc_exit_armed = false;
+    hideExitHint();
     _help_page->attach(lv_screen_active());
     _help_active = true;
 }
@@ -445,6 +495,74 @@ void FilesApp::closeHelpPage()
         _help_page.reset();
     }
     _help_active = false;
+}
+
+void FilesApp::createExitHint()
+{
+    if (_exit_hint) {
+        return;
+    }
+
+    _exit_hint = lv_label_create(lv_layer_top());
+    if (!_exit_hint) {
+        return;
+    }
+
+    lv_label_set_text(_exit_hint, "Hold ESC to exit");
+    lv_obj_set_size(_exit_hint, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_style_text_font(_exit_hint, uiMonoFont12(), LV_PART_MAIN);
+    lv_obj_set_style_text_color(_exit_hint, lv_color_hex(0xFED40D), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(_exit_hint, lv_color_hex(0x474747), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(_exit_hint, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(_exit_hint, 0, LV_PART_MAIN);
+    lv_obj_set_style_radius(_exit_hint, 6, LV_PART_MAIN);
+    lv_obj_set_style_pad_left(_exit_hint, 12, LV_PART_MAIN);
+    lv_obj_set_style_pad_right(_exit_hint, 12, LV_PART_MAIN);
+    lv_obj_set_style_pad_top(_exit_hint, 5, LV_PART_MAIN);
+    lv_obj_set_style_pad_bottom(_exit_hint, 5, LV_PART_MAIN);
+    lv_obj_set_style_text_align(_exit_hint, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+    lv_obj_align(_exit_hint, LV_ALIGN_BOTTOM_MID, 0, -38);
+    lv_obj_clear_flag(_exit_hint, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(_exit_hint, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(_exit_hint, LV_OBJ_FLAG_HIDDEN);
+}
+
+void FilesApp::showExitHint()
+{
+    if (!_exit_hint || !lv_obj_is_valid(_exit_hint)) {
+        return;
+    }
+    lv_obj_remove_flag(_exit_hint, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(_exit_hint);
+}
+
+void FilesApp::hideExitHint()
+{
+    if (_exit_hint && lv_obj_is_valid(_exit_hint)) {
+        lv_obj_add_flag(_exit_hint, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+void FilesApp::releaseEscPress()
+{
+    if (!_esc_pressed) {
+        return;
+    }
+
+    if (!_esc_long_consumed && (!_esc_exit_armed || _help_active || browserEscapeHandledByView())) {
+        onKey('\x1b');
+    }
+    hideExitHint();
+    _esc_pressed       = false;
+    _esc_long_consumed = false;
+    _esc_exit_armed    = false;
+    _esc_pressed_at    = 0;
+}
+
+bool FilesApp::browserEscapeHandledByView()
+{
+    return _browser_vm.actionMenuOpen().get() || _browser_vm.pendingDelete().get().active ||
+           _browser_vm.pendingRename().get().active;
 }
 
 ViewModel* FilesApp::viewModelFor(PageId page)
@@ -493,6 +611,11 @@ void FilesApp::setCurrentPage(PageId page)
     View* next_view = viewFor(page);
     if (!next || (next == _current_vm && next_view == _current_view)) {
         return;
+    }
+
+    if (page != PageId::Browser && _esc_exit_armed) {
+        _esc_exit_armed = false;
+        hideExitHint();
     }
 
     if (_current_view) {
