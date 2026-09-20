@@ -10,7 +10,6 @@
 #include <lvgl/lvgl_cpp/obj.hpp>
 #include <algorithm>
 #include <cctype>
-#include <cmath>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -32,7 +31,11 @@ constexpr int32_t kFullscreenY                 = 0;
 constexpr int32_t kFullscreenWidth             = kScreenWidth;
 constexpr int32_t kFullscreenHeight            = kScreenHeight;
 constexpr int32_t kMoveStep                    = 16;
-constexpr uint32_t kMinScale                   = 32;
+// LVGL image scales are expressed as 1/256.  The preview viewport is only
+// 280x110, so camera photos can legitimately need a scale below 12.5% to fit
+// without cropping.  Keep the lower bound at the smallest usable value and
+// let fitScale() choose the actual contain scale.
+constexpr uint32_t kMinScale                   = 1;
 constexpr uint32_t kMaxScale                   = 2048;
 constexpr uint32_t kScaleStep                  = 32;
 constexpr int32_t kCounterClockwiseQuarterTurn = 2700;
@@ -89,10 +92,12 @@ uint32_t fitScale(uint32_t imageWidth, uint32_t imageHeight, uint32_t boundsWidt
         return LV_SCALE_NONE;
     }
 
-    const float scale = std::min(static_cast<float>(boundsWidth) / static_cast<float>(imageWidth),
-                                 static_cast<float>(boundsHeight) / static_cast<float>(imageHeight));
-    return std::clamp(static_cast<uint32_t>(std::round(scale * static_cast<float>(LV_SCALE_NONE))), kMinScale,
-                      kMaxScale);
+    // Use integer floor arithmetic so the transformed image never grows past
+    // either viewport edge due to rounding at the contain boundary.
+    const uint64_t width_scale  = (static_cast<uint64_t>(boundsWidth) * LV_SCALE_NONE) / imageWidth;
+    const uint64_t height_scale = (static_cast<uint64_t>(boundsHeight) * LV_SCALE_NONE) / imageHeight;
+    const uint64_t scale        = std::min(width_scale, height_scale);
+    return std::clamp(static_cast<uint32_t>(scale), kMinScale, kMaxScale);
 }
 
 class ImagePreviewPage : public PreviewPage {
