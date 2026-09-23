@@ -143,5 +143,5 @@ on `ffmpeg` for video preview playback.
 The generated package is written to `dist/`:
 
 ```text
-dist/m5cardputerzero-files_1.0.0_m5stack1_arm64.deb
+dist/m5cardputerzero-files_1.0.1_m5stack1_arm64.deb
 ```

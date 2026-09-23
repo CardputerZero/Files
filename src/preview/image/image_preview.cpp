@@ -37,7 +37,6 @@ constexpr int32_t kMoveStep                    = 16;
 // let fitScale() choose the actual contain scale.
 constexpr uint32_t kMinScale                   = 1;
 constexpr uint32_t kMaxScale                   = 2048;
-constexpr uint32_t kScaleStep                  = 32;
 constexpr int32_t kCounterClockwiseQuarterTurn = 2700;
 
 bool extensionUsuallyImage(const std::string& extension)
@@ -253,10 +252,10 @@ public:
                 fitForCurrentMode();
                 break;
             case '5':
-                zoom(-static_cast<int32_t>(kScaleStep));
+                zoom(false);
                 break;
             case '7':
-                zoom(static_cast<int32_t>(kScaleStep));
+                zoom(true);
                 break;
             case '8':
                 rotateCounterClockwise();
@@ -339,11 +338,16 @@ private:
         applyImageTransform();
     }
 
-    void zoom(int32_t delta)
+    void zoom(bool zoomIn)
     {
-        const auto next = static_cast<int32_t>(_scale) + delta;
-        _scale =
-            static_cast<uint32_t>(std::clamp(next, static_cast<int32_t>(kMinScale), static_cast<int32_t>(kMaxScale)));
+        // Scale relative to the current size: 5/4 in, 4/5 out. A fixed delta
+        // can collapse a fitted camera photo straight to the minimum scale.
+        const uint32_t numerator   = zoomIn ? 5 : 4;
+        const uint32_t denominator = zoomIn ? 4 : 5;
+        uint32_t next = (_scale * numerator + denominator / 2) / denominator;
+        // Keep both keys effective when rounding would leave the scale unchanged.
+        next   = zoomIn ? std::max(next, _scale + 1) : std::min(next, _scale - 1);
+        _scale = std::clamp(next, kMinScale, kMaxScale);
         applyImageTransform();
     }
 
