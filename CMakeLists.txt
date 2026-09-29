@@ -1,11 +1,19 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(M5CardputerZeroFiles VERSION 1.0.1 LANGUAGES C CXX ASM)
+project(M5CardputerZeroFiles VERSION 1.0.2 LANGUAGES C CXX ASM)
 
 option(FILES_USE_SDL "Use LVGL's SDL backend for desktop testing" ON)
 option(FILES_CONVERT_ASSETS "Convert image assets during CMake configure" ON)
 option(BUILD_TESTING "Build Files tests" OFF)
 set(FILES_BIN_NAME "M5CardputerZero-Files" CACHE STRING "Output executable name")
+
+if(NOT DEFINED FILES_USE_PULSEAUDIO)
+    if(FILES_USE_SDL)
+        set(FILES_USE_PULSEAUDIO OFF)
+    else()
+        set(FILES_USE_PULSEAUDIO ON)
+    endif()
+endif()
 
 include(CTest)
 
@@ -189,6 +197,7 @@ endif()
 
 target_compile_definitions(${FILES_BIN_NAME} PRIVATE
     FILES_USE_SDL=$<IF:$<BOOL:${FILES_USE_SDL}>,1,0>
+    FILES_USE_PULSEAUDIO=$<IF:$<BOOL:${FILES_USE_PULSEAUDIO}>,1,0>
 )
 
 target_link_libraries(${FILES_BIN_NAME} PRIVATE
@@ -302,4 +311,13 @@ if(BUILD_TESTING)
         ${FILES_SYSTEM_LIBS}
     )
     add_test(NAME font_coverage COMMAND font_coverage_tests)
+
+    add_executable(audio_playback_gain_tests
+        tests/audio_playback_gain_test.cpp
+        src/preview/audio/audio_playback_gain.cpp
+    )
+    target_include_directories(audio_playback_gain_tests PRIVATE
+        "${FILES_SRC_DIR}"
+    )
+    add_test(NAME audio_playback_gain COMMAND audio_playback_gain_tests)
 endif()

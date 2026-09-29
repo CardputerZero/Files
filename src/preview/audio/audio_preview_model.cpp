@@ -1,5 +1,7 @@
 #include "preview/audio/audio_preview_model.hpp"
 
+#include "preview/audio/audio_playback_gain.hpp"
+
 #include <miniaudio.h>
 #include <spdlog/spdlog.h>
 #include <algorithm>
@@ -7,6 +9,7 @@
 #include <cmath>
 #include <cstring>
 #include <mutex>
+#include <vector>
 
 namespace files {
 namespace {
@@ -14,6 +17,7 @@ namespace {
 constexpr ma_uint32 kPlaybackChannels   = 2;
 constexpr ma_uint32 kPlaybackSampleRate = 48000;
 constexpr ma_format kPlaybackFormat     = ma_format_f32;
+constexpr ma_uint64 kPeakScanFrames     = 4096;
 
 const char* maResultName(ma_result result)
 {
@@ -62,6 +66,7 @@ struct AudioPreviewModel::Impl {
     std::atomic<bool> finished{false};
     std::atomic<uint32_t> speed_step{1};
     ma_uint64 total_frames = 0;
+    float normalization_gain = 1.0f;
 
     ~Impl()
     {
@@ -91,8 +96,10 @@ struct AudioPreviewModel::Impl {
                          maResultName(result));
         }
 
-        spdlog::info("AudioPreviewModel: loaded path={}, frames={}, duration={:.2f}s", file.path, total_frames,
-                     durationSec());
+        normalization_gain = scanNormalizationGain(file.path);
+
+        spdlog::info("AudioPreviewModel: loaded path={}, frames={}, duration={:.2f}s, gain={:.2f}", file.path,
+                     total_frames, durationSec(), normalization_gain);
         return ensureDevice();
     }
 
@@ -212,6 +219,12 @@ private:
             return false;
         }
 
+        result = ma_device_set_master_volume(&device, 1.0f);
+        if (result != MA_SUCCESS) {
+            spdlog::warn("AudioPreviewModel: failed to set playback master volume, result={} {}", static_cast<int>(result),
+                         maResultName(result));
+        }
+
         device_inited = true;
         spdlog::info("AudioPreviewModel: playback device initialized, channels={}, sampleRate={}", kPlaybackChannels,
                      kPlaybackSampleRate);
@@ -224,6 +237,16 @@ private:
             return true;
         }
 
+#if FILES_USE_PULSEAUDIO
+        ma_backend backends[] = {ma_backend_pulseaudio};
+        ma_result result      = ma_context_init(backends, 1, nullptr, &context);
+        if (result != MA_SUCCESS) {
+            spdlog::error("AudioPreviewModel: ma_context_init PulseAudio failed, result={} {}", static_cast<int>(result),
+                          maResultName(result));
+            return false;
+        }
+        spdlog::info("AudioPreviewModel: miniaudio context initialized with PulseAudio backend");
+#else
         ma_result result = ma_context_init(nullptr, 0, nullptr, &context);
         if (result != MA_SUCCESS) {
             spdlog::error("AudioPreviewModel: ma_context_init default backend failed, result={} {}",
@@ -231,6 +254,7 @@ private:
             return false;
         }
         spdlog::info("AudioPreviewModel: miniaudio context initialized with default backend");
+#endif
         context_inited = true;
         return true;
     }
@@ -260,6 +284,49 @@ private:
             decoder_inited = false;
         }
         total_frames = 0;
+        normalization_gain = 1.0f;
+    }
+
+    float scanNormalizationGain(const std::string& path)
+    {
+        ma_decoder scan_decoder{};
+        ma_decoder_config config = ma_decoder_config_init(kPlaybackFormat, kPlaybackChannels, kPlaybackSampleRate);
+        ma_result result         = ma_decoder_init_file(path.c_str(), &config, &scan_decoder);
+        if (result != MA_SUCCESS) {
+            spdlog::warn("AudioPreviewModel: normalization scan open failed, path={}, result={} {}", path,
+                         static_cast<int>(result), maResultName(result));
+            return 1.0f;
+        }
+
+        std::vector<float> buffer(static_cast<size_t>(kPeakScanFrames * kPlaybackChannels));
+        float peak       = 0.0f;
+        bool scan_failed = false;
+        while (true) {
+            ma_uint64 frames_read = 0;
+            result = ma_decoder_read_pcm_frames(&scan_decoder, buffer.data(), kPeakScanFrames, &frames_read);
+            if (frames_read > 0) {
+                peak = audio_playback_gain::observePeak(peak, buffer.data(),
+                                                        static_cast<size_t>(frames_read * kPlaybackChannels));
+            }
+            if (result != MA_SUCCESS && result != MA_AT_END) {
+                scan_failed = true;
+                break;
+            }
+            if (frames_read == 0 || result == MA_AT_END) {
+                break;
+            }
+        }
+        ma_decoder_uninit(&scan_decoder);
+
+        if (scan_failed) {
+            spdlog::warn("AudioPreviewModel: normalization scan failed, path={}, result={} {}", path,
+                         static_cast<int>(result), maResultName(result));
+            return 1.0f;
+        }
+
+        const float gain = audio_playback_gain::fullScaleGain(peak);
+        spdlog::info("AudioPreviewModel: normalization path={}, peak={:.6f}, gain={:.2f}", path, peak, gain);
+        return gain;
     }
 
     ma_uint64 cursorFrame()
@@ -310,7 +377,10 @@ private:
                 break;
             }
 
-            std::memcpy(out + static_cast<size_t>(i) * kPlaybackChannels, frame, sizeof(frame));
+            for (ma_uint32 channel = 0; channel < kPlaybackChannels; ++channel) {
+                out[static_cast<size_t>(i) * kPlaybackChannels + channel] =
+                    audio_playback_gain::apply(frame[channel], self->normalization_gain);
+            }
 
             for (uint32_t skip = 1; skip < step; ++skip) {
                 ma_uint64 discarded = 0;
