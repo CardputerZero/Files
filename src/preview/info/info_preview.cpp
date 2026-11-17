@@ -115,7 +115,7 @@ public:
             label->setTextFont(uiMonoFont12());
             label->setTextColor(lv_color_hex(0xA7A7A7));
             label->setLongMode(LV_LABEL_LONG_DOT);
-            label->setSize(300, 16);
+            label->setSize(300, LV_SIZE_CONTENT);
             label->setPos(10, 44 + i * 20);
             _field_labels.push_back(std::move(label));
         }
@@ -124,14 +124,14 @@ public:
         _path_title_label->setText("Path:");
         _path_title_label->setTextFont(uiMonoFont12());
         _path_title_label->setTextColor(lv_color_hex(0xA7A7A7));
-        _path_title_label->setSize(40, 16);
+        _path_title_label->setSize(40, LV_SIZE_CONTENT);
         _path_title_label->setPos(10, 44 + 5 * 20);
 
         _path_value_label = std::make_unique<smooth_ui_toolkit::lvgl_cpp::Label>(_root->raw_ptr());
         _path_value_label->setTextFont(uiMonoFont12());
         _path_value_label->setTextColor(lv_color_hex(0xA7A7A7));
         _path_value_label->setLongMode(LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
-        _path_value_label->setSize(254, lv_font_get_line_height(uiMonoFont12()));
+        _path_value_label->setSize(254, LV_SIZE_CONTENT);
         _path_value_label->setPos(56, 44 + 5 * 20);
 
         renderFile();
