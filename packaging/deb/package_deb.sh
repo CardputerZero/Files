@@ -12,6 +12,8 @@ BUILD_DIR="${BUILD_DIR:-${ROOT_DIR}/build/package}"
 STAGE_DIR="${STAGE_DIR:-${ROOT_DIR}/build/deb-root}"
 DIST_DIR="${DIST_DIR:-${ROOT_DIR}/dist}"
 BIN_NAME="M5CardputerZero-Files"
+FONT_DIR="${ROOT_DIR}/src/assets/fonts"
+DOC_DIR="${STAGE_DIR}/usr/share/doc/${PACKAGE_NAME}"
 CMAKE_BIN="${CMAKE:-cmake}"
 CMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE:-Release}"
 
@@ -82,6 +84,7 @@ done
 rm -rf "${STAGE_DIR}"
 mkdir -p \
     "${STAGE_DIR}/DEBIAN" \
+    "${DOC_DIR}" \
     "${STAGE_DIR}/usr/share/APPLaunch/bin" \
     "${STAGE_DIR}/usr/share/APPLaunch/applications" \
     "${STAGE_DIR}/usr/share/APPLaunch/share/images" \
@@ -90,6 +93,12 @@ mkdir -p \
 install -m 755 "${EXECUTABLE}" "${STAGE_DIR}/usr/share/APPLaunch/bin/${BIN_NAME}"
 install -m 644 "${DESKTOP_TEMPLATE}" "${STAGE_DIR}/usr/share/APPLaunch/applications/files.desktop"
 install -m 644 "${ICON_FILE}" "${STAGE_DIR}/usr/share/APPLaunch/share/images/files.png"
+
+install -m 644 "${SCRIPT_DIR}/copyright" "${DOC_DIR}/copyright"
+install -m 644 "${FONT_DIR}/NotoSans/OFL-NotoSans.txt" "${FONT_DIR}/NotoSans/OFL-NotoSansCJK.txt" \
+    "${FONT_DIR}/NotoSans/OFL-NotoSansMono.txt" "${DOC_DIR}/"
+install -m 644 "${FONT_DIR}/Montserrat/OFL.txt" "${DOC_DIR}/OFL-Montserrat.txt"
+install -m 644 "${FONT_DIR}/Montserrat/LICENSE-FontAwesome5.txt" "${DOC_DIR}/"
 
 INSTALLED_SIZE="$(du -sk "${STAGE_DIR}/usr" | awk '{print $1}')"
 cat >"${STAGE_DIR}/DEBIAN/control" <<EOF
@@ -100,6 +109,7 @@ Priority: optional
 Architecture: ${DEB_ARCH}
 Maintainer: ${MAINTAINER}
 Depends: libc6, libstdc++6, libgcc-s1, ffmpeg
+Recommends: udisks2
 Installed-Size: ${INSTALLED_SIZE}
 Description: Files application for M5CardputerZero APPLaunch
  Files application and launcher entry.

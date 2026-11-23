@@ -309,11 +309,15 @@ private:
         _title_label->setText(_title.empty() ? "Preview" : _title.c_str());
         _title_label->setTextFont(uiFont10());
         _title_label->setTextColor(lv_color_hex(kTextColor));
-        _title_label->setLongMode(LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
-        const int32_t title_height = lv_font_get_line_height(uiFont10());
-        _title_label->setSize(kScreenWidth - kTextPaddingX * 2 - 8, title_height);
-        _title_label->setPos(0, std::max<int32_t>(0, (kPathBarHeight - title_height) / 2));
+        _title_label->setLongMode(LV_LABEL_LONG_MODE_WRAP);
+        _title_label->setSize(kScreenWidth - kTextPaddingX * 2 - 8, LV_SIZE_CONTENT);
         lv_obj_set_style_text_align(_title_label->raw_ptr(), LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+        lv_obj_update_layout(_title_label->raw_ptr());
+        const int32_t titleHeight = lv_obj_get_height(_title_label->raw_ptr());
+        const int32_t barHeight = std::max<int32_t>(kPathBarHeight, titleHeight);
+        _path_bar->setHeight(barHeight);
+        _title_label->setPos(0, (barHeight - titleHeight) / 2);
+        _label->setY(barHeight + 8);
     }
 
     void createTextPanel()

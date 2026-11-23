@@ -48,6 +48,9 @@ LV_IMAGE_DECLARE(image_magic_brick);
 LV_IMAGE_DECLARE(image_magic_target);
 
 /* Fonts */
+LV_FONT_DECLARE(font_montserrat_medium_14);
+LV_FONT_DECLARE(font_noto_sans_semibold_12);
+LV_FONT_DECLARE(font_noto_sans_semibold_14);
 LV_FONT_DECLARE(font_noto_sans_mono_semibold_12);
 LV_FONT_DECLARE(font_noto_sans_mono_semibold_14);
 LV_FONT_DECLARE(font_noto_sans_sc_semibold_10);

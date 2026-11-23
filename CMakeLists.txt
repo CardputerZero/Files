@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(M5CardputerZeroFiles VERSION 1.0.3 LANGUAGES C CXX ASM)
+project(M5CardputerZeroFiles VERSION 1.0.4 LANGUAGES C CXX ASM)
 
 option(FILES_USE_SDL "Use LVGL's SDL backend for desktop testing" ON)
 option(FILES_CONVERT_ASSETS "Convert image assets during CMake configure" ON)
@@ -104,6 +104,9 @@ set(BOX2D_UNIT_TESTS OFF CACHE BOOL "" FORCE)
 set(BOX2D_VALIDATE OFF CACHE BOOL "" FORCE)
 
 add_subdirectory("${FILES_LVGL_DIR}" EXCLUDE_FROM_ALL)
+# LVGL uses this font directly in its themes and widgets.
+set(FILES_DEFAULT_FONT_C "${FILES_SRC_DIR}/assets/res_c/font_montserrat_medium_14.c")
+target_sources(lvgl PRIVATE "${FILES_DEFAULT_FONT_C}")
 add_subdirectory("${FILES_SPDLOG_DIR}" EXCLUDE_FROM_ALL)
 add_subdirectory("${FILES_SMOOTH_UI_DIR}" EXCLUDE_FROM_ALL)
 add_subdirectory("${FILES_BOX2D_DIR}" EXCLUDE_FROM_ALL)
@@ -177,6 +180,7 @@ file(GLOB_RECURSE FILES_PREVIEW_CPP CONFIGURE_DEPENDS
 file(GLOB_RECURSE FILES_ASSET_C CONFIGURE_DEPENDS
     "${FILES_SRC_DIR}/assets/res_c/*.c"
 )
+list(REMOVE_ITEM FILES_ASSET_C "${FILES_DEFAULT_FONT_C}")
 
 add_executable(${FILES_BIN_NAME}
     ${FILES_CPP}
@@ -227,6 +231,7 @@ if(BUILD_TESTING)
     add_executable(filesystem_transfer_tests
         tests/filesystem_transfer_test.cpp
         src/models/filesystem_transfer.cpp
+        src/models/mount_info.cpp
     )
     target_include_directories(filesystem_transfer_tests PRIVATE
         "${FILES_SRC_DIR}"
@@ -244,6 +249,9 @@ if(BUILD_TESTING)
         src/models/file_browser_model.cpp
         src/models/file_type_registry.cpp
         src/models/filesystem_transfer.cpp
+        src/models/mount_info.cpp
+        src/models/removable_volumes.cpp
+        src/models/command.cpp
     )
     target_include_directories(file_browser_model_tests PRIVATE
         "${FILES_SRC_DIR}"
@@ -254,6 +262,20 @@ if(BUILD_TESTING)
         Threads::Threads
     )
     add_test(NAME file_browser_model COMMAND file_browser_model_tests)
+
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        get_target_property(STORAGE_TEST_SOURCES file_browser_model_tests SOURCES)
+        list(REMOVE_ITEM STORAGE_TEST_SOURCES tests/file_browser_model_test.cpp)
+        add_executable(storage_package_tests tests/storage_package_test.cpp ${STORAGE_TEST_SOURCES})
+        target_include_directories(storage_package_tests PRIVATE "${FILES_SRC_DIR}")
+        target_link_libraries(storage_package_tests PRIVATE smooth_ui_toolkit spdlog::spdlog Threads::Threads)
+        add_test(NAME storage_package COMMAND storage_package_tests)
+        add_executable(files_hardening_probe tests/hardening_probe.cpp ${STORAGE_TEST_SOURCES})
+        target_include_directories(files_hardening_probe PRIVATE "${FILES_SRC_DIR}")
+        target_link_libraries(files_hardening_probe PRIVATE smooth_ui_toolkit spdlog::spdlog Threads::Threads)
+        target_link_options(files_hardening_probe PRIVATE -Wl,--wrap=fsync)
+        add_test(NAME storage_command_drain COMMAND files_hardening_probe pipe)
+    endif()
 
     add_executable(jpeg_decoder_tests
         tests/jpeg_decoder_test.cpp
@@ -297,6 +319,12 @@ if(BUILD_TESTING)
 
     add_executable(font_coverage_tests
         tests/font_coverage_test.cpp
+        src/assets/font_assets.cpp
+        src/assets/res_c/font_noto_sans_semibold_12.c
+        src/assets/res_c/font_noto_sans_semibold_14.c
+        src/assets/res_c/font_noto_sans_jp_semibold_10.c
+        src/assets/res_c/font_noto_sans_jp_semibold_12.c
+        src/assets/res_c/font_noto_sans_jp_semibold_14.c
         src/assets/res_c/font_noto_sans_mono_semibold_12.c
         src/assets/res_c/font_noto_sans_mono_semibold_14.c
         src/assets/res_c/font_noto_sans_sc_semibold_10.c

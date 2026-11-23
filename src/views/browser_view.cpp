@@ -1,5 +1,7 @@
 #include "views/browser_view.hpp"
 
+#include "views/browser_text.hpp"
+
 #include "assets/assets.h"
 #include "assets/font_assets.hpp"
 #include "views/magic_view.hpp"
@@ -10,6 +12,7 @@
 #include <cmath>
 #include <filesystem>
 #include <iterator>
+#include <string_view>
 
 namespace files {
 namespace {
@@ -20,9 +23,10 @@ constexpr int32_t kPathBarHeight      = 21;
 constexpr int32_t kPathTextX          = 10;
 constexpr int32_t kPathTextWidth      = 300;
 constexpr int32_t kListX              = 0;
-constexpr int32_t kListY              = 29;
+constexpr int32_t kListY              = 24;
 constexpr int32_t kListWidth          = 320;
-constexpr int32_t kListHeight         = 132;
+constexpr int32_t kKeyBarHeight       = 23;
+constexpr int32_t kListHeight         = kScreenHeight - kListY - kKeyBarHeight;
 constexpr int32_t kIconX              = 10;
 constexpr int32_t kTextX              = 38;
 constexpr int32_t kCursorSize         = 25;
@@ -39,7 +43,7 @@ constexpr size_t kFileRowPoolSize =
     static_cast<size_t>((kListHeight + kMenuItemPitch - 1) / kMenuItemPitch + kFileRowOverscan * 2 + 1);
 constexpr int32_t kActionMenuY              = 56;
 constexpr int32_t kActionMenuHiddenY        = 171;
-constexpr int32_t kActionMenuHeight         = kScreenHeight - kActionMenuY;
+constexpr int32_t kActionMenuHeight         = kScreenHeight - kActionMenuY - kKeyBarHeight;
 constexpr int32_t kActionMenuSideBleed      = 2;
 constexpr int32_t kActionMenuBottomBleed    = 12;
 constexpr int32_t kActionMenuPaddingTop     = 10;
@@ -69,17 +73,14 @@ constexpr int32_t kDeleteOpenOriginHeight   = 120;
 constexpr int32_t kStatusHudHeight          = 28;
 constexpr int32_t kStatusHudMinWidth        = 96;
 constexpr int32_t kStatusHudMaxWidth        = 300;
-constexpr int32_t kStatusHudShownY          = 135;
+constexpr int32_t kStatusHudShownY          = kScreenHeight - kKeyBarHeight - kStatusHudHeight - 3;
 constexpr int32_t kStatusHudHiddenY         = 171;
-constexpr int32_t kHudShownY                = 137;
-constexpr int32_t kHudHiddenY               = 171;
 constexpr uint32_t kPathBarColor            = 0x313131;
 constexpr uint32_t kTextColor               = 0xFFFFFF;
 constexpr uint32_t kMutedTextColor          = 0x9A9A9A;
 constexpr uint32_t kActionMenuBgColor       = 0x313131;
 constexpr uint32_t kScrollBarColor          = 0x2B2B2B;
 constexpr uint32_t kScrollThumbColor        = 0x848484;
-constexpr float kHudCloseDuration           = 0.34f;
 constexpr float kSelectorMoveDuration       = 0.32f;
 constexpr float kSelectorMoveBounce         = 0.30f;
 constexpr float kSelectorShapeDuration      = 0.30f;
@@ -88,7 +89,6 @@ constexpr float kCameraDuration             = 0.44f;
 constexpr float kActionMenuDuration         = 0.36f;
 constexpr uint32_t kMenuRenderInterval      = 16;
 constexpr uint32_t kStatusHudHoldMs         = 3600;
-constexpr uint32_t kHudHoldMs               = 10000;
 
 std::string compactPath(const std::string& path)
 {
@@ -105,14 +105,6 @@ std::string compactPath(const std::string& path)
         }
     }
     return fsPath.lexically_normal().string();
-}
-
-std::string rowText(const FileEntry& entry)
-{
-    if (entry.name.empty()) {
-        return "(unnamed)";
-    }
-    return entry.name;
 }
 
 const lv_image_dsc_t* imageForEntry(const FileEntry& entry)
@@ -160,6 +152,10 @@ MenuAction menuActionFor(BrowserAction action, const FileEntry* selectedEntry = 
             return {"Info", &image_icon_info};
         case BrowserAction::Delete:
             return {"Delete", &image_icon_delete};
+        case BrowserAction::Places:
+            return {"Places", &image_icon_folder};
+        case BrowserAction::Eject:
+            return {"Eject"};
     }
     return {"Open", &image_icon_default};
 }
@@ -262,12 +258,12 @@ public:
         _row_data.reserve(entries.size());
         _data.option_list.reserve(entries.size());
         for (size_t i = 0; i < entries.size(); ++i) {
-            std::string text    = rowText(entries[i]);
+            std::string text    = browserRowText(entries[i], kMenuItemMaxWidth - kTextX - kMenuPaddingRight);
             const int32_t width = optionWidth(text);
             addOption({{0.0f, static_cast<float>(static_cast<int32_t>(i) * kMenuItemPitch), static_cast<float>(width),
                         static_cast<float>(kMenuItemHeight)},
                        nullptr});
-            _row_data.push_back(RowData{std::move(text), imageForEntry(entries[i]), width});
+            _row_data.push_back({std::move(text), imageForEntry(entries[i]), width, entries[i].mountRoot});
         }
 
         jumpToInstant(clampIndex(selectedIndex));
@@ -326,6 +322,7 @@ private:
         std::string text;
         const lv_image_dsc_t* image = nullptr;
         int32_t width               = 0;
+        bool usb                    = false;
     };
 
     struct Row {
@@ -345,9 +342,15 @@ private:
             icon->setSize(20, 20);
             icon->setPos(kIconX, 0);
 
+            usbIcon = lv_label_create(container->raw_ptr());
+            lv_label_set_text(usbIcon, LV_SYMBOL_USB);
+            lv_obj_set_style_text_font(usbIcon, LV_FONT_DEFAULT, 0);
+            lv_obj_set_style_text_color(usbIcon, lv_color_hex(0xE4CB7A), 0);
+            lv_obj_align(usbIcon, LV_ALIGN_LEFT_MID, kIconX, 0);
+
             label->setTextFont(uiFont14());
             label->setTextColor(lv_color_hex(kMutedTextColor));
-            label->setLongMode(LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
+            label->setLongMode(LV_LABEL_LONG_MODE_CLIP);
             label->align(LV_ALIGN_LEFT_MID, kTextX, 0);
             container->addFlag(LV_OBJ_FLAG_HIDDEN);
         }
@@ -361,7 +364,14 @@ private:
             entryIndex = index;
             itemWidth  = data.width;
             text       = data.text;
-            icon->setSrc(data.image);
+            if (data.usb) {
+                lv_obj_remove_flag(usbIcon, LV_OBJ_FLAG_HIDDEN);
+                icon->addFlag(LV_OBJ_FLAG_HIDDEN);
+            } else {
+                lv_obj_add_flag(usbIcon, LV_OBJ_FLAG_HIDDEN);
+                icon->setSrc(data.image);
+                icon->removeFlag(LV_OBJ_FLAG_HIDDEN);
+            }
             label->setText(text);
             container->setSize(itemWidth, kMenuItemHeight);
             label->setSize(itemWidth - kTextX - kMenuPaddingRight, LV_SIZE_CONTENT);
@@ -395,6 +405,7 @@ private:
         bool isSelected   = false;
 
         static constexpr size_t kUnboundIndex = static_cast<size_t>(-1);
+        lv_obj_t* usbIcon = nullptr;
     };
 
     std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Container> _panel;
@@ -731,9 +742,17 @@ private:
             container->setScrollbarMode(LV_SCROLLBAR_MODE_OFF);
             container->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
 
-            icon->setSrc(action.icon);
-            icon->setSize(20, 20);
-            icon->setPos(kIconX, 0);
+            if (action.icon) {
+                icon->setSrc(action.icon);
+                icon->setSize(20, 20);
+                icon->setPos(kIconX, 0);
+            } else {
+                auto* symbol = lv_label_create(container->raw_ptr());
+                lv_label_set_text(symbol, LV_SYMBOL_EJECT);
+                lv_obj_set_style_text_font(symbol, LV_FONT_DEFAULT, 0);
+                lv_obj_set_style_text_color(symbol, lv_color_hex(kTextColor), 0);
+                lv_obj_align(symbol, LV_ALIGN_LEFT_MID, kIconX + 3, 0);
+            }
 
             label->setText(action.text);
             label->setTextFont(uiFont14());
@@ -1266,6 +1285,118 @@ private:
     }
 };
 
+class BrowserView::PackagePanel {
+public:
+    explicit PackagePanel(lv_obj_t* parent)
+    {
+        _panel = lv_obj_create(parent);
+        lv_obj_remove_style_all(_panel);
+        lv_obj_set_size(_panel, 306, 156);
+        lv_obj_center(_panel);
+        lv_obj_set_style_bg_color(_panel, lv_color_hex(0x16232E), 0);
+        lv_obj_set_style_bg_opa(_panel, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_color(_panel, lv_color_hex(0x52758E), 0);
+        lv_obj_set_style_border_width(_panel, 1, 0);
+        lv_obj_set_style_radius(_panel, 9, 0);
+        lv_obj_remove_flag(_panel, LV_OBJ_FLAG_SCROLLABLE);
+        _title = makeLabel(_panel, 11, 7, 282, lv_color_hex(0xFFFFFF));
+
+        _scroll = lv_obj_create(_panel);
+        lv_obj_remove_style_all(_scroll);
+        lv_obj_set_pos(_scroll, 11, 31);
+        lv_obj_set_size(_scroll, 283, 98);
+        lv_obj_set_scroll_dir(_scroll, LV_DIR_VER);
+        lv_obj_set_scrollbar_mode(_scroll, LV_SCROLLBAR_MODE_AUTO);
+        lv_obj_set_style_width(_scroll, 3, LV_PART_SCROLLBAR);
+        lv_obj_set_style_bg_color(_scroll, lv_color_hex(0x88ABC2), LV_PART_SCROLLBAR);
+        lv_obj_set_style_bg_opa(_scroll, LV_OPA_COVER, LV_PART_SCROLLBAR);
+        _text = makeLabel(_scroll, 0, 0, 272, lv_color_hex(0xE3ECF3));
+        _hint = makeLabel(_panel, 11, 134, 282, lv_color_hex(0xF2F2F2));
+        lv_obj_set_style_text_align(_hint, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_add_flag(_panel, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    ~PackagePanel() { lv_obj_delete(_panel); }
+
+    void setDialog(const PackageDialog& dialog, bool showUsb)
+    {
+        const bool modeChanged = _mode != dialog.mode;
+        _mode = dialog.mode;
+        if (dialog.mode == PackageDialogMode::Closed) {
+            lv_obj_add_flag(_panel, LV_OBJ_FLAG_HIDDEN);
+            return;
+        }
+        lv_obj_remove_flag(_panel, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(_panel);
+        lv_label_set_text(_title, dialog.title.c_str());
+        lv_label_set_text(_text, dialog.text.c_str());
+        lv_obj_update_layout(_panel);
+        const int bodyY = std::clamp<int>(11 + lv_obj_get_height(_title), 31, 81);
+        lv_obj_set_y(_scroll, bodyY);
+        lv_obj_set_height(_scroll, 129 - bodyY);
+        lv_obj_update_layout(_panel);
+        const char* hint = "";
+        bool canScroll = false;
+        switch (dialog.mode) {
+            case PackageDialogMode::Transferring:
+                hint = "Esc Cancel";
+                break;
+            case PackageDialogMode::ConfirmEject:
+                hint = "Enter Eject · Esc Cancel";
+                break;
+            case PackageDialogMode::Result:
+                hint = "Esc Back";
+                canScroll = true;
+                break;
+            default:
+                break;
+        }
+        _base_hint = hint;
+        _can_scroll = canScroll && lv_obj_get_scroll_top(_scroll) + lv_obj_get_scroll_bottom(_scroll) > 0;
+        setUsbHint(showUsb);
+        lv_obj_update_layout(_panel);
+        lv_obj_scroll_to_y(_scroll, 0, LV_ANIM_OFF);
+        if (modeChanged) {
+            lv_obj_invalidate(_panel);
+        }
+    }
+
+    void scroll(int offset) { lv_obj_scroll_by_bounded(_scroll, 0, -offset, LV_ANIM_OFF); }
+
+    void setUsbHint(bool visible)
+    {
+        if (_mode == PackageDialogMode::Closed) {
+            return;
+        }
+        const auto commands = _base_hint + (visible ? " · U USB" : "");
+        std::string hint = _can_scroll ? "F↑ X↓ Scroll · " + commands : commands;
+        if (_can_scroll && statusTextWidth(hint) > 282) {
+            hint = "F↑ X↓ · " + commands;
+        }
+        lv_label_set_text(_hint, hint.c_str());
+    }
+
+private:
+    lv_obj_t* _panel = nullptr;
+    lv_obj_t* _title = nullptr;
+    lv_obj_t* _scroll = nullptr;
+    lv_obj_t* _text = nullptr;
+    lv_obj_t* _hint = nullptr;
+    PackageDialogMode _mode = PackageDialogMode::Closed;
+    std::string _base_hint;
+    bool _can_scroll = false;
+
+    static lv_obj_t* makeLabel(lv_obj_t* parent, int x, int y, int width, lv_color_t color)
+    {
+        auto* label = lv_label_create(parent);
+        lv_obj_set_pos(label, x, y);
+        lv_obj_set_width(label, width);
+        lv_obj_set_style_text_color(label, color, 0);
+        lv_obj_set_style_text_font(label, uiFont12(), 0);
+        return label;
+    }
+};
+
 class BrowserView::StatusHud {
 public:
     explicit StatusHud(lv_obj_t* parent)
@@ -1344,54 +1475,6 @@ private:
     bool _visible         = false;
 };
 
-class BrowserView::TipsHud {
-public:
-    explicit TipsHud(lv_obj_t* parent)
-        : _image(std::make_unique<smooth_ui_toolkit::lvgl_cpp::Image>(parent)), _y(kHudHiddenY)
-    {
-        _image->setSrc(&image_hud);
-        _image->setPos(0, kHudHiddenY);
-
-        _y.springOptions().visualDuration = 0.4;
-        _y.springOptions().bounce         = 0.22f;
-
-        _y.begin();
-        _y.move(kHudShownY);
-    }
-
-    void tick(uint32_t nowMs)
-    {
-        if (_shown_at_ms == 0) {
-            _shown_at_ms = nowMs;
-        }
-        if (!_closing && nowMs >= _shown_at_ms + kHudHoldMs) {
-            _closing                          = true;
-            _y.springOptions().visualDuration = kHudCloseDuration;
-            _y.springOptions().bounce         = 0.0f;
-            _y.move(kHudHiddenY);
-        }
-
-        _image->setY(static_cast<int32_t>(std::round(_y.value())));
-    }
-
-    void dismiss()
-    {
-        if (_closing) {
-            return;
-        }
-        _closing                          = true;
-        _y.springOptions().visualDuration = kHudCloseDuration;
-        _y.springOptions().bounce         = 0.0f;
-        _y.move(kHudHiddenY);
-    }
-
-private:
-    std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Image> _image;
-    smooth_ui_toolkit::AnimateValue _y;
-    uint32_t _shown_at_ms = 0;
-    bool _closing         = false;
-};
-
 BrowserView::BrowserView(BrowserViewModel& vm) : _vm(vm)
 {
 }
@@ -1403,8 +1486,6 @@ BrowserView::~BrowserView()
 
 void BrowserView::onEnter(lv_obj_t* parent)
 {
-    _render_ready = false;
-
     _root = std::make_unique<smooth_ui_toolkit::lvgl_cpp::Container>(parent);
     _root->setSize(kScreenWidth, kScreenHeight);
     _root->setBgColor(lv_color_hex(0x000000));
@@ -1435,15 +1516,21 @@ void BrowserView::onEnter(lv_obj_t* parent)
     _file_list             = std::make_unique<FilesMenu>(_root->raw_ptr());
     _action_menu           = std::make_unique<ActionMenu>(_root->raw_ptr());
     _cursor                = std::make_unique<MenuCursor>(_root->raw_ptr());
+    _key_bar = lv_label_create(_root->raw_ptr());
+    lv_obj_set_size(_key_bar, kScreenWidth, kKeyBarHeight);
+    lv_obj_align(_key_bar, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_set_style_text_font(_key_bar, uiFont12(), 0);
+    lv_obj_set_style_text_color(_key_bar, lv_color_hex(0xF2F2F2), 0);
+    lv_obj_set_style_pad_hor(_key_bar, 10, 0);
+    lv_label_set_long_mode(_key_bar, LV_LABEL_LONG_MODE_CLIP);
+    lv_obj_set_style_text_align(_key_bar, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_bg_color(_key_bar, lv_color_hex(kPathBarColor), 0);
+    lv_obj_set_style_bg_opa(_key_bar, LV_OPA_COVER, 0);
     _delete_confirm_dialog = std::make_unique<DeleteConfirmDialog>(_root->raw_ptr());
     _rename_confirm_dialog = std::make_unique<RenameConfirmDialog>(_root->raw_ptr(), _vm);
     _status_hud            = std::make_unique<StatusHud>(_root->raw_ptr());
+    _package_panel         = std::make_unique<PackagePanel>(_root->raw_ptr());
     _magic_view            = std::make_unique<MagicView>(_root->raw_ptr());
-    if (!_tips_hud_shown) {
-        _tips_hud       = std::make_unique<TipsHud>(_root->raw_ptr());
-        _tips_hud_shown = true;
-    }
-
     _vm.currentDirectory().observe(this, onDirectoryChanged);
     _vm.entries().observe(this, onEntriesChanged);
     _vm.selectedIndex().observe(this, onSelectedIndexChanged);
@@ -1454,10 +1541,11 @@ void BrowserView::onEnter(lv_obj_t* parent)
     _vm.pendingDelete().observe(this, onPendingDeleteChanged);
     _vm.pendingRename().observe(this, onPendingRenameChanged);
     _vm.pendingRenameName().observe(this, onPendingRenameNameChanged);
+    _vm.packageDialog().observe(this, onPackageDialogChanged);
+    _vm.packageScroll().observe(this, onPackageScroll);
     _magic_serial_seen = _vm.magic().get();
     _vm.magic().observe(this, onMagicChanged);
 
-    _render_ready = true;
 }
 
 void BrowserView::onExit()
@@ -1467,6 +1555,9 @@ void BrowserView::onExit()
 
 void BrowserView::tick(uint32_t nowMs)
 {
+    if (_usb_hint_visible != _vm.hasRemovableVolumes()) {
+        renderKeyBar();
+    }
     if (_file_list) {
         _file_list->update(nowMs);
     }
@@ -1483,9 +1574,6 @@ void BrowserView::tick(uint32_t nowMs)
         _status_hud->tick(nowMs);
     }
     updateCursorTarget();
-    if (_tips_hud) {
-        _tips_hud->tick(nowMs);
-    }
     if (_magic_view) {
         _magic_view->tick(nowMs);
     }
@@ -1493,8 +1581,9 @@ void BrowserView::tick(uint32_t nowMs)
 
 void BrowserView::destroy()
 {
-    _render_ready = false;
     _vm.magic().removeObserver();
+    _vm.packageScroll().removeObserver();
+    _vm.packageDialog().removeObserver();
     _vm.pendingRenameName().removeObserver();
     _vm.pendingRename().removeObserver();
     _vm.pendingDelete().removeObserver();
@@ -1506,8 +1595,8 @@ void BrowserView::destroy()
     _vm.entries().removeObserver();
     _vm.currentDirectory().removeObserver();
     _magic_view.reset();
-    _tips_hud.reset();
     _status_hud.reset();
+    _package_panel.reset();
     _rename_confirm_dialog.reset();
     _delete_confirm_dialog.reset();
     _cursor.reset();
@@ -1515,22 +1604,33 @@ void BrowserView::destroy()
     _file_list.reset();
     _path_label.reset();
     _path_bar.reset();
+    _key_bar = nullptr;
     _root.reset();
 }
 
-void BrowserView::dismissTipsHud()
+void BrowserView::renderKeyBar()
 {
-    if (_render_ready && _tips_hud) {
-        _tips_hud->dismiss();
+    if (_usb_hint_visible != _vm.hasRemovableVolumes()) {
+        _usb_hint_visible = _vm.hasRemovableVolumes();
+        if (_package_panel) {
+            _package_panel->setUsbHint(_vm.canOpenUsb());
+        }
+    }
+    const bool menu = _vm.actionMenuOpen().get();
+    const bool canMove = menu ? _vm.actionCount() > 1 : _vm.entries().get().size() > 1;
+    const auto text = browserKeyHint(_vm.inPlaces(), _vm.canEject(), _usb_hint_visible,
+                                     _vm.selectedEntry() != nullptr, canMove, menu);
+    if (_key_bar && std::string_view(lv_label_get_text(_key_bar)) != text) {
+        lv_label_set_text(_key_bar, text.c_str());
     }
 }
 
 void BrowserView::renderDirectory(const std::string& directory)
 {
-    dismissTipsHud();
     if (_path_label) {
-        _path_label->setText(compactPath(directory).c_str());
+        _path_label->setText(directory.empty() ? "Places" : compactPath(directory).c_str());
     }
+    renderKeyBar();
 }
 
 void BrowserView::renderEntries(const std::vector<FileEntry>& entries)
@@ -1538,15 +1638,16 @@ void BrowserView::renderEntries(const std::vector<FileEntry>& entries)
     if (_file_list) {
         _file_list->setEntries(entries, _vm.selectedIndex().get());
     }
+    renderKeyBar();
     updateCursorTarget();
 }
 
 void BrowserView::renderSelectedIndex(int index)
 {
-    dismissTipsHud();
     if (_file_list) {
         _file_list->setSelectedIndex(index);
     }
+    renderKeyBar();
     updateCursorTarget();
 }
 
@@ -1566,9 +1667,6 @@ void BrowserView::renderStatus(const std::string& status)
 
 void BrowserView::renderEnterPressed(bool pressed)
 {
-    if (pressed) {
-        dismissTipsHud();
-    }
     if (_cursor) {
         _cursor->setPressed(pressed);
     }
@@ -1576,9 +1674,6 @@ void BrowserView::renderEnterPressed(bool pressed)
 
 void BrowserView::renderActionMenuOpen(bool open)
 {
-    if (open) {
-        dismissTipsHud();
-    }
     if (_file_list) {
         _file_list->setPinnedToSelected(open);
     }
@@ -1592,13 +1687,16 @@ void BrowserView::renderActionMenuOpen(bool open)
             _action_menu->setActions(std::move(actions), _vm.selectedEntry());
         }
         _action_menu->setOpen(open);
+        if (open) {
+            lv_obj_move_foreground(_key_bar);
+        }
     }
+    renderKeyBar();
     updateCursorTarget();
 }
 
 void BrowserView::renderActionMenuSelectedIndex(int index)
 {
-    dismissTipsHud();
     if (_action_menu) {
         _action_menu->setSelectedIndex(index);
     }
@@ -1607,9 +1705,6 @@ void BrowserView::renderActionMenuSelectedIndex(int index)
 
 void BrowserView::renderPendingDelete(const PendingDeleteFile& pending)
 {
-    if (pending.active) {
-        dismissTipsHud();
-    }
     if (_delete_confirm_dialog) {
         _delete_confirm_dialog->setPending(pending);
     }
@@ -1618,9 +1713,6 @@ void BrowserView::renderPendingDelete(const PendingDeleteFile& pending)
 
 void BrowserView::renderPendingRename(const PendingRenameFile& pending)
 {
-    if (pending.active) {
-        dismissTipsHud();
-    }
     if (_rename_confirm_dialog) {
         _rename_confirm_dialog->setPending(pending);
     }
@@ -1652,7 +1744,7 @@ void BrowserView::updateCursorTarget()
         return;
     }
 
-    if (_vm.pendingDelete().get().active || _vm.pendingRename().get().active) {
+    if (_vm.pendingDelete().get().active || _vm.pendingRename().get().active || _vm.packageDialogOpen()) {
         _cursor->setTarget(false, {0, 0});
         return;
     }
@@ -1718,6 +1810,29 @@ void BrowserView::onPendingRenameChanged(void* context, const PendingRenameFile&
 void BrowserView::onPendingRenameNameChanged(void* context, const std::string& name)
 {
     static_cast<BrowserView*>(context)->renderPendingRenameName(name);
+}
+
+void BrowserView::onPackageDialogChanged(void* context, const PackageDialog& dialog)
+{
+    auto* self = static_cast<BrowserView*>(context);
+    if (self->_package_panel) {
+        if (dialog.mode == PackageDialogMode::Closed) {
+            self->renderKeyBar();
+            lv_obj_remove_flag(self->_key_bar, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(self->_key_bar, LV_OBJ_FLAG_HIDDEN);
+        }
+        self->_package_panel->setDialog(dialog, self->_vm.canOpenUsb());
+        self->updateCursorTarget();
+    }
+}
+
+void BrowserView::onPackageScroll(void* context, const int& offset)
+{
+    auto* self = static_cast<BrowserView*>(context);
+    if (self->_package_panel) {
+        self->_package_panel->scroll(offset);
+    }
 }
 
 void BrowserView::onMagicChanged(void* context, const uint32_t& magicSerial)
