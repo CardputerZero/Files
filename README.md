@@ -54,9 +54,23 @@ the converter dependencies are missing, install them in your Python environment:
 ./.venv/bin/python -m pip install pypng lz4 Pillow
 ```
 
-Font conversion is not part of the normal build. If fonts are regenerated with
-`src/assets/convert_fonts.py`, install `lv_font_conv` separately and keep it
-available in `PATH`.
+Font conversion is not part of the normal build. To regenerate the checked-in
+fonts, run the following from the repository root after bootstrapping dependencies.
+
+```bash
+npm install -g lv_font_conv@1.5.3
+python3 src/assets/convert_fonts.py
+```
+
+Files uses Noto Sans SemiBold for 12 px and 14 px UI text, with Noto Sans SC
+and JP SemiBold for CJK coverage. It uses Noto Sans Mono SemiBold for
+monospaced text and Montserrat Medium 14 px for the LVGL default.
+The Noto builds supplement the missing Latin glyphs with
+[Noto Sans SemiBold](https://github.com/notofonts/noto-fonts/blob/ffebf8c1ee449e544955a7e813c54f9b73848eac/hinted/ttf/NotoSans/NotoSans-SemiBold.ttf).
+The Montserrat build uses the same source and Font Awesome 5 symbols as LVGL.
+The generated fonts cover U+00A0–U+017F. The upstream license notices are in
+[`src/assets/fonts/NotoSans`](src/assets/fonts/NotoSans) and
+[`src/assets/fonts/Montserrat`](src/assets/fonts/Montserrat).
 
 ## Build
 
@@ -143,5 +157,5 @@ on `ffmpeg` for video preview playback.
 The generated package is written to `dist/`:
 
 ```text
-dist/m5cardputerzero-files_1.0.3_m5stack1_arm64.deb
+dist/m5cardputerzero-files_1.0.4_m5stack1_arm64.deb
 ```
