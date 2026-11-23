@@ -45,6 +45,8 @@ jobs:
           mkdir -p release-assets
           cp dist/M5CardputerZero-Files release-assets/
           cp dist/*.deb release-assets/
+          dpkg-deb -x dist/*.deb "$RUNNER_TEMP/files-package"
+          cp -r "$RUNNER_TEMP/files-package/usr/share/doc/m5cardputerzero-files" release-assets/font-licenses
           ls -lh release-assets
 
       - name: Upload workflow artifact

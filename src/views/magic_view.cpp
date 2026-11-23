@@ -14,7 +14,8 @@ namespace files {
 namespace {
 
 constexpr int32_t kScreenWidth   = 320;
-constexpr int32_t kScreenHeight  = 170;
+constexpr int32_t kScreenHeight  = 150;
+constexpr int32_t kLayoutOffsetY = kScreenHeight - 170;
 constexpr int32_t kMagicSize     = 10;
 constexpr int32_t kBowWidth      = 6;
 constexpr int32_t kBowHeight     = 38;
@@ -104,15 +105,15 @@ constexpr std::array<MagicLayout, 3> kLayouts = {
         10,
     },
     MagicLayout{
-        {Point{236.0f, 36.0f}, Point{236.0f, 66.0f}, Point{236.0f, 96.0f}, Point{236.0f, 126.0f},
-         Point{236.0f, 156.0f}},
+        {Point{236.0f, 40.0f}, Point{236.0f, 69.0f}, Point{236.0f, 97.0f}, Point{236.0f, 126.0f},
+         Point{236.0f, 154.0f}},
         5,
-        {BrickPlacement{218.0f, 65.0f, true}, BrickPlacement{243.0f, 65.0f, true}, BrickPlacement{218.0f, 95.0f, true},
-         BrickPlacement{243.0f, 95.0f, true}, BrickPlacement{218.0f, 125.0f, true},
-         BrickPlacement{243.0f, 125.0f, true}, BrickPlacement{218.0f, 155.0f, true},
-         BrickPlacement{243.0f, 155.0f, true}, BrickPlacement{230.0f, 50.0f, false},
-         BrickPlacement{230.0f, 80.0f, false}, BrickPlacement{230.0f, 110.0f, false},
-         BrickPlacement{230.0f, 140.0f, false}},
+        {BrickPlacement{218.0f, 68.0f, true}, BrickPlacement{243.0f, 68.0f, true}, BrickPlacement{218.0f, 96.0f, true},
+         BrickPlacement{243.0f, 96.0f, true}, BrickPlacement{218.0f, 125.0f, true},
+         BrickPlacement{243.0f, 125.0f, true}, BrickPlacement{218.0f, 153.0f, true},
+         BrickPlacement{243.0f, 153.0f, true}, BrickPlacement{230.0f, 53.0f, false},
+         BrickPlacement{230.0f, 81.0f, false}, BrickPlacement{230.0f, 110.0f, false},
+         BrickPlacement{230.0f, 138.0f, false}},
         12,
     },
     MagicLayout{
@@ -350,7 +351,7 @@ struct MagicView::Impl {
         launchDir        = {plannedMagicVel.x / len, plannedMagicVel.y / len};
         targetBowAngle   = std::atan2(launchDir.y, launchDir.x);
         bowAngle         = 0.0f;
-        bowCenter        = {48.0f + static_cast<float>(magicSerial % 3), 141.0f};
+        bowCenter        = {48.0f + static_cast<float>(magicSerial % 3), 141.0f + kLayoutOffsetY};
         bowX             = static_cast<int32_t>(std::round(bowCenter.x - kBowWidth / 2.0f));
         bowY             = static_cast<int32_t>(std::round(bowCenter.y - kBowHeight / 2.0f));
         const float pull = pullDist(rng);
@@ -360,10 +361,9 @@ struct MagicView::Impl {
         magicPos  = restPos;
 
         const int32_t xJitter     = pileXDist(rng);
-        const int32_t yJitter     = 0;
         const MagicLayout& layout = kLayouts[layoutDist(rng)];
-        setupTargets(layout, xJitter, yJitter);
-        setupBricks(layout, xJitter, yJitter);
+        setupTargets(layout, xJitter, kLayoutOffsetY);
+        setupBricks(layout, xJitter, kLayoutOffsetY);
 
         mask->removeFlag(LV_OBJ_FLAG_HIDDEN);
         mask->setBgOpa(0);
@@ -423,9 +423,10 @@ struct MagicView::Impl {
         shapeDef.material.friction    = 0.84f;
         shapeDef.material.restitution = 0.08f;
 
-        createStaticBox(bodyId, shapeDef, 160.0f, 174.0f, 160.0f, 4.0f);
-        createStaticBox(bodyId, shapeDef, -4.0f, 85.0f, 4.0f, 85.0f);
-        createStaticBox(bodyId, shapeDef, 324.0f, 85.0f, 4.0f, 85.0f);
+        constexpr float halfHeight = kScreenHeight / 2.0f;
+        createStaticBox(bodyId, shapeDef, 160.0f, kScreenHeight + 4.0f, 160.0f, 4.0f);
+        createStaticBox(bodyId, shapeDef, -4.0f, halfHeight, 4.0f, halfHeight);
+        createStaticBox(bodyId, shapeDef, 324.0f, halfHeight, 4.0f, halfHeight);
         createStaticBox(bodyId, shapeDef, 160.0f, -4.0f, 160.0f, 4.0f);
     }
 
@@ -958,6 +959,16 @@ void MagicView::tick(uint32_t nowMs)
     if (_impl) {
         _impl->tick(nowMs);
     }
+}
+
+bool MagicView::active() const
+{
+    return _impl->active;
+}
+
+void MagicView::stop()
+{
+    if (_impl->active) _impl->hide();
 }
 
 }  // namespace files

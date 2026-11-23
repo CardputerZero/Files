@@ -1,6 +1,60 @@
 {
     "targets": [
         {
+            "name": "font_noto_sans_clock_16",
+            "source": "NotoSans-SemiBold.ttf",
+            "args": ["--no-compress", "--no-prefilter", "--no-kerning"],
+            "size": 16,
+            "bpp": 4,
+            "symbols": ["0123456789:-"]
+        },
+        {
+            "name": "font_noto_sans_semibold_12",
+            "source": "NotoSans-SemiBold.ttf",
+            "args": [
+                "--no-compress",
+                "--no-prefilter",
+                "--force-fast-kern-format"
+            ],
+            "size": 12,
+            "bpp": 4,
+            "ranges": [
+                "0x20-0x024F",
+                "0x0370-0x052F",
+                "0x2000-0x2029",
+                "0x202F-0x205E",
+                "0x20A0-0x20CF",
+                "0x2100-0x214F"
+            ],
+            "symbols": [
+                "–—‘’“”…•·×"
+            ],
+            "additional_fonts": []
+        },
+        {
+            "name": "font_noto_sans_semibold_14",
+            "source": "NotoSans-SemiBold.ttf",
+            "args": [
+                "--no-compress",
+                "--no-prefilter",
+                "--force-fast-kern-format"
+            ],
+            "size": 14,
+            "bpp": 4,
+            "ranges": [
+                "0x20-0x024F",
+                "0x0370-0x052F",
+                "0x2000-0x2029",
+                "0x202F-0x205E",
+                "0x20A0-0x20CF",
+                "0x2100-0x214F"
+            ],
+            "symbols": [
+                "–—‘’“”…•·×"
+            ],
+            "additional_fonts": []
+        },
+        {
             "name": "font_noto_sans_mono_semibold_12",
             "source": "NotoSansMono-SemiBold.ttf",
             "args": [
@@ -22,6 +76,14 @@
             ],
             "symbols": [
                 "–—‘’“”…•·"
+            ],
+            "additional_fonts": [
+                {
+                    "source": "NotoSans-SemiBold.ttf",
+                    "ranges": [
+                        "0x00AD"
+                    ]
+                }
             ]
         },
         {
@@ -46,6 +108,14 @@
             ],
             "symbols": [
                 "–—‘’“”…•·"
+            ],
+            "additional_fonts": [
+                {
+                    "source": "NotoSans-SemiBold.ttf",
+                    "ranges": [
+                        "0x00AD"
+                    ]
+                }
             ]
         },
         {
@@ -81,6 +151,14 @@
                             16,
                             55
                         ]
+                    ]
+                }
+            ],
+            "additional_fonts": [
+                {
+                    "source": "NotoSans-SemiBold.ttf",
+                    "ranges": [
+                        "0x104-0x10F,0x114-0x119,0x11C-0x127,0x12C-0x142,0x145-0x146,0x149-0x14B,0x150-0x151,0x154-0x167,0x16E-0x17F"
                     ]
                 }
             ]
@@ -120,6 +198,14 @@
                         ]
                     ]
                 }
+            ],
+            "additional_fonts": [
+                {
+                    "source": "NotoSans-SemiBold.ttf",
+                    "ranges": [
+                        "0x104-0x10F,0x114-0x119,0x11C-0x127,0x12C-0x142,0x145-0x146,0x149-0x14B,0x150-0x151,0x154-0x167,0x16E-0x17F"
+                    ]
+                }
             ]
         },
         {
@@ -157,6 +243,14 @@
                         ]
                     ]
                 }
+            ],
+            "additional_fonts": [
+                {
+                    "source": "NotoSans-SemiBold.ttf",
+                    "ranges": [
+                        "0x104-0x10F,0x114-0x119,0x11C-0x127,0x12C-0x142,0x145-0x146,0x149-0x14B,0x150-0x151,0x154-0x167,0x16E-0x17F"
+                    ]
+                }
             ]
         },
         {
@@ -171,7 +265,7 @@
             "bpp": 4,
             "ranges": [
                 "0x20-0x7E",
-                "0xA0-0xFF",
+                "0xA0-0x17F",
                 "0x2190-0x21FF",
                 "0x3040-0x309F",
                 "0x30A0-0x30FF",
@@ -189,6 +283,14 @@
                             16,
                             47
                         ]
+                    ]
+                }
+            ],
+            "additional_fonts": [
+                {
+                    "source": "NotoSans-SemiBold.ttf",
+                    "ranges": [
+                        "0x104-0x10F,0x114-0x119,0x11C-0x127,0x12C-0x142,0x145-0x146,0x149-0x14B,0x150-0x151,0x154-0x167,0x16E-0x17F"
                     ]
                 }
             ]
@@ -205,7 +307,7 @@
             "bpp": 4,
             "ranges": [
                 "0x20-0x7E",
-                "0xA0-0xFF",
+                "0xA0-0x17F",
                 "0x2190-0x21FF",
                 "0x3040-0x309F",
                 "0x30A0-0x30FF",
@@ -225,6 +327,14 @@
                         ]
                     ]
                 }
+            ],
+            "additional_fonts": [
+                {
+                    "source": "NotoSans-SemiBold.ttf",
+                    "ranges": [
+                        "0x104-0x10F,0x114-0x119,0x11C-0x127,0x12C-0x142,0x145-0x146,0x149-0x14B,0x150-0x151,0x154-0x167,0x16E-0x17F"
+                    ]
+                }
             ]
         },
         {
@@ -239,7 +349,7 @@
             "bpp": 4,
             "ranges": [
                 "0x20-0x7E",
-                "0xA0-0xFF",
+                "0xA0-0x17F",
                 "0x2190-0x21FF",
                 "0x3040-0x309F",
                 "0x30A0-0x30FF",
@@ -257,6 +367,14 @@
                             16,
                             47
                         ]
+                    ]
+                }
+            ],
+            "additional_fonts": [
+                {
+                    "source": "NotoSans-SemiBold.ttf",
+                    "ranges": [
+                        "0x104-0x10F,0x114-0x119,0x11C-0x127,0x12C-0x142,0x145-0x146,0x149-0x14B,0x150-0x151,0x154-0x167,0x16E-0x17F"
                     ]
                 }
             ]

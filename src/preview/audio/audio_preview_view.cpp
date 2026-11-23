@@ -1,9 +1,10 @@
+#include "core/files_language.hpp"
+
 #include "preview/audio/audio_preview_view.hpp"
 
 #include "assets/assets.h"
 #include "assets/font_assets.hpp"
-#include <core/color/color.hpp>
-#include <core/easing/ease.hpp>
+#include "views/ui_style.hpp"
 #include <miniaudio.h>
 #include <algorithm>
 #include <cctype>
@@ -15,8 +16,8 @@
 namespace files {
 namespace {
 
-constexpr int32_t kTitleWidth              = 230;
-constexpr int32_t kTitleY                  = 0;
+constexpr int32_t kTitleWidth              = 252;
+constexpr int32_t kTitleY                  = 2;
 constexpr int32_t kWaveformWidth           = 280;
 constexpr int32_t kWaveformHeight          = 60;
 constexpr int32_t kWaveformX               = 0;
@@ -26,53 +27,35 @@ constexpr int32_t kWaveformBarPitch        = 3;
 constexpr int32_t kWaveformMinBarHeight    = 2;
 constexpr int32_t kWaveformMaxBarHeight    = 56;
 constexpr size_t kWaveformVisibleBarCount  = 94;
-constexpr size_t kWaveformEdgeFadeBarCount = 3;
 constexpr uint32_t kWaveformIdleColor      = 0xFFFFFF;
-constexpr uint32_t kWaveformPlayingColor   = 0x53D671;
-constexpr float kWaveformColorDuration     = 0.4f;
+constexpr uint32_t kWaveformPlayingColor   = ui::success;
 constexpr ma_uint32 kWaveformSampleRate    = 48000;
 constexpr ma_uint32 kWaveformChannels      = 1;
 constexpr ma_format kWaveformFormat        = ma_format_f32;
 constexpr float kWaveformBarsPerSecond     = 24.0f;
 constexpr size_t kWaveformMaxDecodedBars   = 8192;
-constexpr int32_t kPlayheadWidth           = 2;
+constexpr int32_t kPlayheadWidth           = 3;
 constexpr int32_t kPlayheadHeight          = 64;
-constexpr uint32_t kPlayheadColor          = 0x557AFF;
+constexpr uint32_t kPlayheadColor          = ui::accent;
 constexpr int32_t kProgressBarX            = 20;
 constexpr int32_t kProgressBarY            = 106;
 constexpr int32_t kProgressBarWidth        = 280;
 constexpr int32_t kProgressBarHeight       = 5;
 constexpr int32_t kProgressBarRadius       = 2;
-constexpr uint32_t kProgressTrackColor     = 0x2F2F2F;
-constexpr uint32_t kProgressFillColor      = 0xDDDDDD;
-constexpr int32_t kTimeLabelY              = 117;
+constexpr uint32_t kProgressTrackColor     = ui::black;
+constexpr uint32_t kProgressFillColor      = ui::accent;
+// Keep both clocks above the one-row connection notice.
+constexpr int32_t kTimeLabelY              = 114;
 constexpr int32_t kTimeLabelWidth          = 96;
-constexpr uint32_t kTimeTextColor          = 0x777777;
-constexpr float kRootFadeDuration          = 0.18f;
-
-lv_opa_t fadeMaskOpacityFromFloat(float value)
-{
-    return static_cast<lv_opa_t>(std::clamp(static_cast<int>(std::round(value)), 0, 255));
-}
-
+constexpr uint32_t kTimeTextColor          = ui::secondary;
 std::string fileTitle(const AudioPreviewFile& file)
 {
-    std::string name      = file.entry.name.empty() ? file.entry.path : file.entry.name;
-    const std::string ext = file.entry.extension;
-    if (!ext.empty() && name.size() > ext.size()) {
-        std::string tail = name.substr(name.size() - ext.size());
-        std::transform(tail.begin(), tail.end(), tail.begin(),
-                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-        if (tail == ext) {
-            name.resize(name.size() - ext.size());
-        }
-    }
-    return name;
+    return file.entry.name.empty() ? file.entry.path : file.entry.name;
 }
 
 std::string timeText(float seconds)
 {
-    int total = std::max(0, static_cast<int>(std::round(seconds)));
+    int total = std::max(0, static_cast<int>(seconds));
     int hours = total / 3600;
     int mins  = total / 60 % 60;
     int secs  = total % 60;
@@ -88,41 +71,18 @@ std::string timeText(float seconds)
 
 std::string remainingTimeText(float durationSec, float progressSec)
 {
-    return "-" + timeText(std::max(0.0f, durationSec - progressSec));
+    const auto time = timeText(std::ceil(durationSec - progressSec));
+    return time == "0:00" ? time : "-" + time;
 }
 
-lv_opa_t edgeOpacity(size_t index, size_t count)
-{
-    const size_t edge_distance = std::min(index, count - 1 - index);
-    if (edge_distance >= kWaveformEdgeFadeBarCount) {
-        return LV_OPA_COVER;
-    }
-
-    const size_t fade_step = edge_distance + 1;
-    return static_cast<lv_opa_t>((LV_OPA_COVER * fade_step) / (kWaveformEdgeFadeBarCount + 1));
-}
-
-const void* speedIcon(float speed)
-{
-    if (speed >= 5.0f) {
-        return &image_icon_playback_5x;
-    }
-    if (speed >= 2.0f) {
-        return &image_icon_playback_2x;
-    }
-    return &image_icon_playback_1x;
-}
 
 }  // namespace
 
 class AudioPreviewView::WaveformView {
 public:
     explicit WaveformView(lv_obj_t* parent)
-        : _panel(std::make_unique<smooth_ui_toolkit::lvgl_cpp::Container>(parent)), _color(kWaveformIdleColor)
+        : _panel(std::make_unique<smooth_ui_toolkit::lvgl_cpp::Container>(parent))
     {
-        _color.duration       = kWaveformColorDuration;
-        _color.easingFunction = smooth_ui_toolkit::ease::ease_out_quad;
-        _color.begin();
 
         _panel->setSize(kWaveformWidth, kWaveformHeight);
         _panel->align(LV_ALIGN_CENTER, kWaveformX, kWaveformY);
@@ -137,7 +97,7 @@ public:
 
     void load(const AudioPreviewFile& file)
     {
-        _duration_sec = static_cast<float>(file.durationSec);
+        _duration_sec = file.durationSec;
         _progress_sec = 0.0f;
         decode(file.entry.path, file.durationSec);
         lv_obj_invalidate(_panel->raw_ptr());
@@ -149,30 +109,33 @@ public:
         lv_obj_invalidate(_panel->raw_ptr());
     }
 
-    void setPlaying(bool playing)
+    void setNoticeHeight(int height)
     {
-        _color.move(playing ? kWaveformPlayingColor : kWaveformIdleColor);
+        if (_noticeHeight == height) return;
+        _noticeHeight = height;
+        lv_obj_invalidate(_panel->raw_ptr());
     }
 
-    void tick()
+    void setPlaying(bool playing)
     {
-        _color.update();
+        _color = playing ? kWaveformPlayingColor : kWaveformIdleColor;
         lv_obj_invalidate(_panel->raw_ptr());
     }
 
 private:
     std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Container> _panel;
-    smooth_ui_toolkit::color::AnimateRgb_t _color;
+    uint32_t _color = kWaveformIdleColor;
     std::vector<float> _bars;
     float _duration_sec = 0.0f;
     float _progress_sec = 0.0f;
+    int _noticeHeight = 0;
 
     lv_color_t currentColor() const
     {
-        return lv_color_hex(_color.toHex());
+        return lv_color_hex(_color);
     }
 
-    void decode(const std::string& path, uint32_t durationSec)
+    void decode(const std::string& path, float durationSec)
     {
         _bars.assign(kWaveformVisibleBarCount, 0.0f);
 
@@ -186,7 +149,7 @@ private:
         ma_uint64 total_frames = 0;
         result                 = ma_decoder_get_length_in_pcm_frames(&decoder, &total_frames);
         if (result != MA_SUCCESS || total_frames == 0) {
-            total_frames = static_cast<ma_uint64>(durationSec) * kWaveformSampleRate;
+            total_frames = static_cast<ma_uint64>(durationSec * kWaveformSampleRate);
         }
 
         const size_t bar_count =
@@ -229,8 +192,8 @@ private:
 
     float barValueForVisibleIndex(size_t visibleIndex) const
     {
-        if (_bars.empty()) {
-            return 0.0f;
+        if (_bars.empty() || _duration_sec <= 0.0f) {
+            return -1.0f;
         }
 
         const float duration     = std::max(_duration_sec, 0.001f);
@@ -240,7 +203,7 @@ private:
             center_index + static_cast<float>(visibleIndex) - static_cast<float>(kWaveformVisibleBarCount / 2);
         const int index = static_cast<int>(std::round(source_index));
         if (index < 0 || index >= static_cast<int>(_bars.size())) {
-            return 0.0f;
+            return -1.0f;
         }
         return _bars[static_cast<size_t>(index)];
     }
@@ -260,23 +223,28 @@ private:
         line_dsc.color = currentColor();
         line_dsc.width = kWaveformBarWidth;
 
-        const int32_t mid_y = coords.y1 + kWaveformHeight / 2;
+        const int32_t maxHeight = _noticeHeight == 42 ? 21 : kWaveformMaxBarHeight;
+        const int32_t mid_y = _noticeHeight == 42 ? 78 : coords.y1 + kWaveformHeight / 2;
         const int32_t start_x =
             coords.x1 + (kWaveformWidth - ((kWaveformVisibleBarCount - 1) * kWaveformBarPitch + 1)) / 2;
 
         for (size_t i = 0; i < kWaveformVisibleBarCount; ++i) {
+            const auto value = barValueForVisibleIndex(i);
+            if (value < 0.0f) continue;
             int32_t bar_h = kWaveformMinBarHeight +
-                            static_cast<int32_t>(std::round(barValueForVisibleIndex(i) *
-                                                            (kWaveformMaxBarHeight - kWaveformMinBarHeight)));
-            bar_h = std::clamp(bar_h, kWaveformMinBarHeight, kWaveformMaxBarHeight);
+                            static_cast<int32_t>(std::round(value *
+                                                            (maxHeight - kWaveformMinBarHeight)));
+            bar_h = std::clamp(bar_h, kWaveformMinBarHeight, maxHeight);
 
             const int32_t x    = start_x + static_cast<int32_t>(i) * kWaveformBarPitch;
+            // Separate the cursor from both waveform colors with a black pixel.
+            if (x >= 158 && x <= 162) continue;
             const int32_t half = bar_h / 2;
             line_dsc.p1.x      = x;
             line_dsc.p1.y      = mid_y - half;
             line_dsc.p2.x      = x;
             line_dsc.p2.y      = mid_y + half;
-            line_dsc.opa       = edgeOpacity(i, kWaveformVisibleBarCount);
+            line_dsc.opa       = LV_OPA_COVER;
             lv_draw_line(layer, &line_dsc);
         }
     }
@@ -301,16 +269,17 @@ public:
         _track->setBgColor(lv_color_hex(kProgressTrackColor));
         _track->setBgOpa(LV_OPA_COVER);
         _track->setRadius(kProgressBarRadius);
-        _track->setBorderWidth(0);
+        _track->setBorderWidth(1);
+        lv_obj_set_style_border_color(_track->raw_ptr(), lv_color_hex(ui::secondary), 0);
         _track->setShadowWidth(0);
         _track->setPaddingAll(0);
         _track->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
 
-        _fill->setSize(0, kProgressBarHeight);
+        _fill->setSize(0, kProgressBarHeight - 2);
         _fill->setPos(0, 0);
         _fill->setBgColor(lv_color_hex(kProgressFillColor));
         _fill->setBgOpa(LV_OPA_COVER);
-        _fill->setRadius(kProgressBarRadius);
+        _fill->setRadius(0);
         _fill->setBorderWidth(0);
         _fill->setShadowWidth(0);
         _fill->setPaddingAll(0);
@@ -320,7 +289,7 @@ public:
     void setProgress(float progressSec, float durationSec)
     {
         const float ratio = durationSec <= 0.0f ? 0.0f : std::clamp(progressSec / durationSec, 0.0f, 1.0f);
-        _fill->setWidth(static_cast<int32_t>(std::round(ratio * kProgressBarWidth)));
+        _fill->setWidth(static_cast<int32_t>(std::round(ratio * (kProgressBarWidth - 2))));
     }
 
 private:
@@ -350,13 +319,18 @@ void AudioPreviewView::attach(lv_obj_t* parent)
     _root->setScrollbarMode(LV_SCROLLBAR_MODE_OFF);
     _root->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
 
+    ui::box(_root->raw_ptr(), 0, 0, 320, 20, ui::bar);
     _title_label = std::make_unique<smooth_ui_toolkit::lvgl_cpp::Label>(_root->raw_ptr());
     _title_label->setTextFont(uiFont14());
-    _title_label->setTextColor(lv_color_hex(0x777777));
-    _title_label->setTextAlign(LV_TEXT_ALIGN_CENTER);
-    _title_label->setLongMode(LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
+    _title_label->setTextColor(lv_color_hex(ui::white));
+    _title_label->setTextAlign(LV_TEXT_ALIGN_LEFT);
+    _title_label->setLongMode(LV_LABEL_LONG_MODE_CLIP);
     _title_label->setSize(kTitleWidth, LV_SIZE_CONTENT);
-    _title_label->align(LV_ALIGN_TOP_MID, 0, kTitleY);
+    _title_label->setPos(8, kTitleY);
+    _speed_label = ui::label(_root->raw_ptr(), 268, 2, 44, uiFont12(), ui::secondary);
+    lv_obj_set_style_text_align(_speed_label, LV_TEXT_ALIGN_RIGHT, 0);
+    _state_label = ui::label(_root->raw_ptr(), 202, 2, 85, uiFont12(), ui::secondary);
+    lv_obj_set_style_text_align(_state_label, LV_TEXT_ALIGN_RIGHT, 0);
 
     _waveform = std::make_unique<WaveformView>(_root->raw_ptr());
 
@@ -365,7 +339,7 @@ void AudioPreviewView::attach(lv_obj_t* parent)
     _playhead->align(LV_ALIGN_CENTER, 0, kWaveformY);
     _playhead->setBgColor(lv_color_hex(kPlayheadColor));
     _playhead->setBgOpa(LV_OPA_COVER);
-    _playhead->setRadius(1);
+    _playhead->setRadius(0);
     _playhead->setBorderWidth(0);
     _playhead->setShadowWidth(0);
     _playhead->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
@@ -373,33 +347,27 @@ void AudioPreviewView::attach(lv_obj_t* parent)
     _progress_bar = std::make_unique<ProgressBar>(_root->raw_ptr());
 
     _elapsed_label = std::make_unique<smooth_ui_toolkit::lvgl_cpp::Label>(_root->raw_ptr());
-    _elapsed_label->setTextFont(uiMonoFont12());
+    _elapsed_label->setTextFont(&font_noto_sans_clock_16);
     _elapsed_label->setTextColor(lv_color_hex(kTimeTextColor));
     _elapsed_label->setTextAlign(LV_TEXT_ALIGN_LEFT);
     _elapsed_label->setSize(kTimeLabelWidth, LV_SIZE_CONTENT);
     _elapsed_label->setPos(kProgressBarX, kTimeLabelY);
 
     _remaining_label = std::make_unique<smooth_ui_toolkit::lvgl_cpp::Label>(_root->raw_ptr());
-    _remaining_label->setTextFont(uiMonoFont12());
+    _remaining_label->setTextFont(&font_noto_sans_clock_16);
     _remaining_label->setTextColor(lv_color_hex(kTimeTextColor));
     _remaining_label->setTextAlign(LV_TEXT_ALIGN_RIGHT);
     _remaining_label->setSize(kTimeLabelWidth, LV_SIZE_CONTENT);
     _remaining_label->setPos(kProgressBarX + kProgressBarWidth - kTimeLabelWidth, kTimeLabelY);
 
-    _fade_mask = std::make_unique<smooth_ui_toolkit::lvgl_cpp::Container>(_root->raw_ptr());
-    _fade_mask->setSize(lv_pct(100), lv_pct(100));
-    _fade_mask->setBgColor(lv_color_hex(0x000000));
-    _fade_mask->setBgOpa(LV_OPA_COVER);
-    _fade_mask->setBorderWidth(0);
-    _fade_mask->setPaddingAll(0);
-    _fade_mask->setScrollbarMode(LV_SCROLLBAR_MODE_OFF);
-    _fade_mask->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
-
-    _fade_mask_opacity.easingOptions().duration       = kRootFadeDuration;
-    _fade_mask_opacity.easingOptions().easingFunction = smooth_ui_toolkit::ease::ease_out_quad;
-    _fade_mask_opacity.teleport(255);
-    _fade_mask_opacity.move(0);
-
+    _error_panel = ui::box(_root->raw_ptr(), 0, 20, 320, 130, ui::black);
+    const auto* error = local("Cannot play audio", "Zvuk nelze přehrát");
+    const int textWidthPx = textWidth(error, uiFont14());
+    const int start = (320 - 14 - textWidthPx) / 2;
+    ui::errorCross(_error_panel, start, 56);
+    auto* title = ui::label(_error_panel, start + 14, 52, textWidthPx + 2, uiFont14(), ui::error);
+    lv_label_set_text(title, error);
+    ui::hidden(_error_panel, true);
     _key_bar = std::make_unique<BottomKeyBar>(_root->raw_ptr());
 
     _view_model.state().observe(this, onStateChanged);
@@ -427,27 +395,17 @@ void AudioPreviewView::detach()
     _playhead.reset();
     _waveform.reset();
     _title_label.reset();
-    _fade_mask.reset();
+    _state_label = _speed_label = _error_panel = nullptr;
     _root.reset();
 }
 
-void AudioPreviewView::tick(uint32_t nowMs)
+void AudioPreviewView::setNoticeHeight(int height)
 {
-    (void)nowMs;
-
-    if (_fade_mask) {
-        _fade_mask_opacity.update();
-        _fade_mask->setBgOpa(fadeMaskOpacityFromFloat(_fade_mask_opacity.directValue()));
-        if (_fade_mask_opacity.done() && _fade_mask_opacity.directValue() <= 0.0f) {
-            _fade_mask->addFlag(LV_OBJ_FLAG_HIDDEN);
-        }
-    }
-    if (_waveform) {
-        _waveform->tick();
-    }
-    if (_key_bar) {
-        _key_bar->tick();
-    }
+    if (!_waveform || !_playhead) return;
+    _waveform->setNoticeHeight(height);
+    const bool compact = height == 42;
+    _playhead->setSize(kPlayheadWidth, compact ? 30 : kPlayheadHeight);
+    _playhead->align(LV_ALIGN_CENTER, 0, compact ? -6 : kWaveformY);
 }
 
 void AudioPreviewView::renderState(AudioPlaybackState state)
@@ -455,13 +413,28 @@ void AudioPreviewView::renderState(AudioPlaybackState state)
     if (_waveform) {
         _waveform->setPlaying(state == AudioPlaybackState::Playing);
     }
+    const bool failed = state == AudioPlaybackState::Error;
+    ui::hidden(_error_panel, !failed);
+    ui::hidden(_speed_label, failed);
+    const bool paused = state == AudioPlaybackState::Paused;
+    const bool ended = state == AudioPlaybackState::Stopped;
+    const auto* status = failed ? "" : paused ? local("Paused", "Pauza") :
+        ended ? local("Ended", "Konec") : state == AudioPlaybackState::Playing ?
+        local("Playing", "Hraje") : local("Ready", "Připraveno");
+    ui::hidden(_state_label, failed);
+    lv_label_set_text(_state_label, status);
+    const int width = failed ? 304 : 267 - textWidth(status, uiFont12());
+    lv_obj_set_width(_title_label->raw_ptr(), width);
+    ui::line(_title_label->raw_ptr(), fileTitle(_view_model.file().get()), width, uiFont14(), std::string::npos, true);
+    ui::hidden(_elapsed_label->raw_ptr(), failed);
+    ui::hidden(_remaining_label->raw_ptr(), failed);
     updateKeyBar();
 }
 
 void AudioPreviewView::renderFile(const AudioPreviewFile& file)
 {
     if (_title_label) {
-        _title_label->setText(fileTitle(file));
+        renderState(_view_model.state().get());
     }
     if (_waveform) {
         _waveform->load(file);
@@ -471,7 +444,11 @@ void AudioPreviewView::renderFile(const AudioPreviewFile& file)
 
 void AudioPreviewView::renderProgress(float progressSec)
 {
-    const float duration = static_cast<float>(_view_model.file().get().durationSec);
+    const float duration = _view_model.file().get().durationSec;
+    const auto state = _view_model.state().get();
+    if (state == AudioPlaybackState::Playing && progressSec >= duration && duration > 0) {
+        progressSec = std::nextafter(duration, 0.0f);
+    }
     if (_waveform) {
         _waveform->setProgress(progressSec);
     }
@@ -484,11 +461,18 @@ void AudioPreviewView::renderProgress(float progressSec)
     if (_remaining_label) {
         _remaining_label->setText(remainingTimeText(duration, progressSec));
     }
+    const bool canRewind = progressSec > 0;
+    const bool canAdvance = progressSec < duration;
+    if (canRewind != _canRewind || canAdvance != _canAdvance) {
+        _canRewind = canRewind;
+        _canAdvance = canAdvance;
+        updateKeyBar();
+    }
 }
 
 void AudioPreviewView::renderSpeed(float speed)
 {
-    (void)speed;
+    if (_speed_label) lv_label_set_text_fmt(_speed_label, "%d×", static_cast<int>(speed));
     updateKeyBar();
 }
 
@@ -498,13 +482,19 @@ void AudioPreviewView::updateKeyBar()
         return;
     }
 
-    _key_bar->setItems({
-        {'5', &image_icon_playback_replay},
-        {'6', _view_model.state().get() == AudioPlaybackState::Playing ? &image_icon_playback_pause
-                                                                       : &image_icon_playback_play},
-        {'7', &image_icon_playback_forward},
-        {'8', speedIcon(_view_model.speed().get())},
-    });
+    const auto state = _view_model.state().get();
+    if (state == AudioPlaybackState::Error) {
+        _key_bar->setItems({});
+        return;
+    }
+    const auto* action = state == AudioPlaybackState::Playing ? local("Pause", "Pauza") :
+        state == AudioPlaybackState::Stopped ? local("Replay", "Znovu") :
+        state == AudioPlaybackState::Paused ? local("Resume", "Hrát") : local("Play", "Hrát");
+    _key_bar->setSlots({{8, 43, _canRewind ? "5 −10 s" : ""},
+                        {65, 60, std::string("6 ") + action},
+                        {129, 43, _canAdvance ? "7 +10 s" : ""},
+                        {182, 65, local("8 Speed", "8 Rychlost")},
+                        {257, 55, local("Esc Back", "Esc Zpět")}});
 }
 
 void AudioPreviewView::onStateChanged(void* context, const AudioPlaybackState& state)

@@ -1,6 +1,8 @@
 #include "core/files_app.hpp"
 
 #include "assets/font_assets.hpp"
+#include "core/files_language.hpp"
+#include "views/ui_style.hpp"
 #include "preview/text/text_preview.hpp"
 #include <lvgl.h>
 #include <spdlog/spdlog.h>
@@ -116,6 +118,13 @@ FilesApp::~FilesApp()
         lv_obj_delete(_exit_hint);
     }
     _exit_hint = nullptr;
+    _browser_vm.volumeNotice().removeObserver();
+    if (_volume_notice) {
+        lv_obj_delete(_volume_notice);
+    }
+    if (_preview_usb_hint) {
+        lv_obj_delete(_preview_usb_hint);
+    }
     if (_help_page) {
         _help_page->detach();
         _help_page.reset();
@@ -136,6 +145,7 @@ void FilesApp::start()
     lv_obj_set_style_bg_color(lv_screen_active(), lv_color_hex(0x000000), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(lv_screen_active(), LV_OPA_COVER, LV_PART_MAIN);
     createExitHint();
+    createVolumeNotice();
     setupInputGroup();
 #if LV_USE_SDL
     if (!_sdl_event_watch_installed) {
@@ -157,9 +167,19 @@ void FilesApp::onKey(uint32_t key)
     if (key == files_key::Help) {
         if (_help_active) {
             closeHelpPage();
-        } else if (!textInputFocused()) {
+        } else if (!textInputFocused() && !_browser_vm.packageDialogOpen()) {
             showHelpPage();
         }
+        return;
+    }
+
+    if ((key == 'u' || key == 'U') && _browser_vm.openUsb()) {
+        closeHelpPage();
+        return;
+    }
+
+    if ((key == 'e' || key == 'E') && _browser_vm.ejectUsb()) {
+        closeHelpPage();
         return;
     }
 
@@ -196,9 +216,10 @@ void FilesApp::onLvglKey(uint32_t lv_key, const char* utf8)
 
 bool FilesApp::onLvglKeyState(uint32_t lv_key, const char* utf8, bool pressed)
 {
+    const bool storage_key = utf8 && (utf8[0] == 'u' || utf8[0] == 'U' || utf8[0] == 'e' || utf8[0] == 'E');
     bool desktop_help = false;
 #if LV_USE_SDL
-    desktop_help = (lv_key == 'h' || lv_key == 'H') && !textInputFocused();
+    desktop_help = (lv_key == 'h' || lv_key == 'H') && !textInputFocused() && !sensitiveInputActive();
 #endif
     if (lv_key == files_key::Help || desktop_help) {
         if (pressed) {
@@ -224,6 +245,13 @@ bool FilesApp::onLvglKeyState(uint32_t lv_key, const char* utf8, bool pressed)
             sdl_page_key = takeSdlPageKey(lv_key);
         }
 #endif
+
+        if (storage_key) {
+            if (pressed) {
+                onKey(static_cast<uint32_t>(utf8[0]));
+            }
+            return true;
+        }
 
         uint32_t help_key = 0;
         if (lv_key == files_key::PageUp) {
@@ -264,9 +292,8 @@ bool FilesApp::onLvglKeyState(uint32_t lv_key, const char* utf8, bool pressed)
             _esc_pressed       = true;
             _esc_pressed_at    = lv_tick_get();
             _esc_long_consumed = false;
-            _esc_exit_armed =
-                _router.page() == PageId::Browser && !_browser_vm.canGoBack() && !browserEscapeHandledByView();
-            if (_esc_exit_armed) {
+            _esc_exit_armed = canHoldEscToExit();
+            if (_esc_exit_armed && !_browser_vm.actionMenuOpen().get()) {
                 showExitHint();
             }
         } else if (!pressed && _esc_pressed) {
@@ -319,6 +346,13 @@ bool FilesApp::onLvglKeyState(uint32_t lv_key, const char* utf8, bool pressed)
             }
 #endif
             onKey('\t');
+        }
+        return true;
+    }
+
+    if (_router.page() == PageId::Browser && _browser_vm.packagePasswordActive()) {
+        if (pressed) {
+            _browser_vm.editPackagePassword(lv_key == LV_KEY_BACKSPACE ? 8 : lv_key, utf8);
         }
         return true;
     }
@@ -413,6 +447,11 @@ bool FilesApp::onLvglKeyState(uint32_t lv_key, const char* utf8, bool pressed)
         return true;
     }
 
+    if (storage_key) {
+        onKey(static_cast<uint32_t>(utf8[0]));
+        return true;
+    }
+
     if (utf8 && (utf8[0] == ' ' || (utf8[0] >= '0' && utf8[0] <= '9'))) {
         onKey(static_cast<uint32_t>(utf8[0]));
         return true;
@@ -428,8 +467,8 @@ bool FilesApp::onLvglKeyState(uint32_t lv_key, const char* utf8, bool pressed)
 
 void FilesApp::tick(uint32_t nowMs)
 {
-    if (_esc_exit_armed && (_router.page() != PageId::Browser || _help_active || _browser_vm.canGoBack() ||
-                            browserEscapeHandledByView())) {
+    _browser_vm.pollVolumes(nowMs);
+    if (_esc_exit_armed && !canHoldEscToExit()) {
         _esc_exit_armed = false;
         hideExitHint();
     }
@@ -453,6 +492,7 @@ void FilesApp::tick(uint32_t nowMs)
     if (_current_view) {
         _current_view->tick(nowMs);
     }
+    updateVolumeNoticeVisibility();
 }
 
 bool FilesApp::hostRenderingSuspended() const
@@ -469,11 +509,21 @@ void FilesApp::showHelpPage()
         return;
     }
 
-    _help_page = createTextPreviewPage("Help",
-                                       "Browse and edit file directories, and preview supported file formats.\n\n"
-                                       "F / X / OK / ESC: navigation\n"
-                                       "TAB: menu\n"
-                                       "PgUp / PgDn: page");
+    _help_page = createTextPreviewPage(local("Help", "Nápověda"), local(
+        "F #BDBEBD Up# · X #BDBEBD Down# · Enter #BDBEBD Open#\n"
+        "Tab #BDBEBD Menu# · E #BDBEBD Eject#\n"
+        "U #BDBEBD Open or choose drive#\n"
+        "Esc #BDBEBD Back#\n"
+        "Hold Esc #BDBEBD Exit#\n"
+        "PgUp/PgDn #BDBEBD Move by page#\n"
+        "Enter #BDBEBD Review .deb package#",
+        "F #BDBEBD Nahoru# · X #BDBEBD Dolů# · Enter #BDBEBD Otevřít#\n"
+        "Tab #BDBEBD Nabídka# · E #BDBEBD Vysunout#\n"
+        "U #BDBEBD Otevřít nebo vybrat disk#\n"
+        "Esc #BDBEBD Zpět#\n"
+        "Podržet Esc #BDBEBD Ukončit#\n"
+        "PgUp/PgDn #BDBEBD Listovat#\n"
+        "Enter #BDBEBD Náhled balíčku .deb#"));
     if (!_help_page) {
         spdlog::error("FilesApp: failed to create help page");
         return;
@@ -497,34 +547,83 @@ void FilesApp::closeHelpPage()
     _help_active = false;
 }
 
+void FilesApp::createVolumeNotice()
+{
+    _volume_notice = ui::label(lv_layer_top(), 4, 126, 312, uiFont12());
+    _preview_usb_hint = ui::label(lv_layer_top(), 222, 152, 90, uiFont12());
+    lv_obj_set_style_bg_color(_preview_usb_hint, lv_color_hex(ui::bar), 0);
+    lv_obj_set_style_bg_opa(_preview_usb_hint, LV_OPA_COVER, 0);
+    lv_obj_set_style_text_align(_preview_usb_hint, LV_TEXT_ALIGN_RIGHT, 0);
+    ui::keyLegend(_preview_usb_hint, local("U Open USB", "U Otevřít USB"));
+    ui::hidden(_preview_usb_hint, true);
+    _browser_vm.volumeNotice().observe(this, onVolumeNoticeChanged);
+}
+
+void FilesApp::onVolumeNoticeChanged(void* context, const VolumeNotice& notice)
+{
+    auto* self = static_cast<FilesApp*>(context);
+    (void)notice;
+    self->updateVolumeNoticeVisibility();
+}
+
+void FilesApp::updateVolumeNoticeVisibility()
+{
+    const auto& notice = _browser_vm.volumeNotice().get();
+    const bool showUsb = _browser_vm.hasRemovableVolumes() && !notice.connectedMountId &&
+                         (_help_active || _router.page() == PageId::Preview) && !hostRenderingSuspended();
+    if (showUsb) {
+        const auto* preview = _model.preview().page().get();
+        const bool wide = !_help_active && preview && preview->usesWideFooter();
+        const auto* hint = wide ? "U" : _browser_vm.hasMultipleRemovableVolumes() ?
+            local("U Choose drive", "U Vybrat disk") : local("U Open drive", "U Otevřít disk");
+        const int width = textWidth(hint, uiFont12());
+        lv_obj_set_x(_preview_usb_hint, 312 - width);
+        lv_obj_set_width(_preview_usb_hint, width);
+        ui::keyLegend(_preview_usb_hint, hint);
+        lv_obj_remove_flag(_preview_usb_hint, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(_preview_usb_hint, LV_OBJ_FLAG_HIDDEN);
+    }
+    const bool visible = !notice.text.empty() && !_help_active && !_browser_vm.modalInputActive() &&
+                         !hostRenderingSuspended();
+    const bool wasHidden = lv_obj_has_flag(_volume_notice, LV_OBJ_FLAG_HIDDEN);
+    ui::hidden(_volume_notice, !visible);
+    const bool browsing = _router.page() == PageId::Browser;
+    if (auto* page = _model.preview().page().get(); page && !browsing) {
+        page->setNoticeHeight(visible ? (notice.text.find('\n') == std::string::npos ? 24 : 42) : 0);
+    }
+    if (visible) {
+        auto text = notice.text;
+        if (notice.connectedMountId) {
+            if (const auto split = text.find('\n'); split != std::string::npos) text.resize(split);
+            text += _browser_vm.hasMultipleRemovableVolumes() ?
+                local("\nU Choose drive", "\nU Vybrat disk") : local("\nU Open drive", "\nU Otevřít disk");
+        }
+        const int height = text.find('\n') == std::string::npos ? 24 : 42;
+        const auto* preview = _model.preview().page().get();
+        const int y = browsing ? _browser_view.toastY(height) :
+            preview && preview->usesWideFooter() && height == 42 ? 20 : 150 - height;
+        if (browsing) _browser_view.setExternalToast(y, height);
+        if (_notice_text != text || _notice_y != y || wasHidden) {
+            _notice_text = text;
+            _notice_y = y;
+            ui::toast(_volume_notice, text, y, notice.tone == DialogTone::Success ? ui::success :
+                      notice.tone == DialogTone::Warning ? ui::warning : ui::white, notice.connectedMountId != 0);
+            lv_obj_move_foreground(_volume_notice);
+        }
+    } else if (browsing) {
+        _browser_view.setExternalToast();
+    }
+}
+
 void FilesApp::createExitHint()
 {
     if (_exit_hint) {
         return;
     }
 
-    _exit_hint = lv_label_create(lv_layer_top());
-    if (!_exit_hint) {
-        return;
-    }
-
-    lv_label_set_text(_exit_hint, "Hold ESC to exit");
-    lv_obj_set_size(_exit_hint, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-    lv_obj_set_style_text_font(_exit_hint, uiMonoFont12(), LV_PART_MAIN);
-    lv_obj_set_style_text_color(_exit_hint, lv_color_hex(0xFED40D), LV_PART_MAIN);
-    lv_obj_set_style_bg_color(_exit_hint, lv_color_hex(0x474747), LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(_exit_hint, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_set_style_border_width(_exit_hint, 0, LV_PART_MAIN);
-    lv_obj_set_style_radius(_exit_hint, 6, LV_PART_MAIN);
-    lv_obj_set_style_pad_left(_exit_hint, 12, LV_PART_MAIN);
-    lv_obj_set_style_pad_right(_exit_hint, 12, LV_PART_MAIN);
-    lv_obj_set_style_pad_top(_exit_hint, 5, LV_PART_MAIN);
-    lv_obj_set_style_pad_bottom(_exit_hint, 5, LV_PART_MAIN);
-    lv_obj_set_style_text_align(_exit_hint, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
-    lv_obj_align(_exit_hint, LV_ALIGN_BOTTOM_MID, 0, -38);
-    lv_obj_clear_flag(_exit_hint, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(_exit_hint, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_flag(_exit_hint, LV_OBJ_FLAG_HIDDEN);
+    _exit_hint = ui::label(lv_layer_top(), 4, 126, 312, uiFont12());
+    ui::hidden(_exit_hint, true);
 }
 
 void FilesApp::showExitHint()
@@ -532,6 +631,7 @@ void FilesApp::showExitHint()
     if (!_exit_hint || !lv_obj_is_valid(_exit_hint)) {
         return;
     }
+    ui::toast(_exit_hint, local("Hold Esc · Exit", "Podržet Esc · Ukončit"), _browser_view.toastY(24), ui::white);
     lv_obj_remove_flag(_exit_hint, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(_exit_hint);
 }
@@ -559,10 +659,16 @@ void FilesApp::releaseEscPress()
     _esc_pressed_at    = 0;
 }
 
+bool FilesApp::canHoldEscToExit()
+{
+    if (_router.page() != PageId::Browser || _help_active) return false;
+    if (_browser_vm.actionMenuOpen().get() && !_browser_vm.packageDialogOpen() && !textInputFocused()) return true;
+    return !_browser_vm.canGoBack() && !browserEscapeHandledByView();
+}
+
 bool FilesApp::browserEscapeHandledByView()
 {
-    return _browser_vm.actionMenuOpen().get() || _browser_vm.pendingDelete().get().active ||
-           _browser_vm.pendingRename().get().active;
+    return _browser_vm.modalInputActive();
 }
 
 ViewModel* FilesApp::viewModelFor(PageId page)

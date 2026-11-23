@@ -6,6 +6,10 @@
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
+#include <iomanip>
+#include <sstream>
+#include <unistd.h>
+#include <pwd.h>
 #include <limits>
 #include <system_error>
 #include <utility>
@@ -62,6 +66,21 @@ FileOperationResult errorResult(FileOperationStatus status, std::string message)
     return FileOperationResult{status, std::move(message)};
 }
 
+FileOperationResult disconnected()
+{
+    return errorResult(FileOperationStatus::NotFound, "Drive disconnected");
+}
+
+std::optional<uint64_t> freeSpace(const fs::path& path)
+{
+    std::error_code error;
+    const auto space = fs::space(path, error);
+    if (error) {
+        return std::nullopt;
+    }
+    return space.available;
+}
+
 bool isPermissionError(const std::error_code& error)
 {
     return error == std::errc::permission_denied || error == std::errc::operation_not_permitted;
@@ -90,6 +109,8 @@ FileOperationResult filesystemError(const char* operation, const std::error_code
     if (isPermissionError(error)) {
         return errorResult(FileOperationStatus::PermissionDenied, "Permission denied");
     }
+    if (error == std::errc::no_space_on_device) return errorResult(FileOperationStatus::Failed, "Disk is full");
+    if (error == std::errc::read_only_file_system) return errorResult(FileOperationStatus::Failed, "Disk is read-only");
     return errorResult(FileOperationStatus::Failed, std::string(operation) + " failed: " + error.message());
 }
 
@@ -101,14 +122,54 @@ FileOperationResult transferError(const char* operation, const internal::Filesys
     if (isPermissionError(transfer.error)) {
         return errorResult(FileOperationStatus::PermissionDenied, "Permission denied");
     }
-    return errorResult(FileOperationStatus::Failed, std::string(operation) + " failed: " + transfer.detail);
+    if (transfer.error == std::errc::no_space_on_device || transfer.error == std::errc::read_only_file_system) {
+        return filesystemError(operation, transfer.error);
+    }
+    if (transfer.failure == internal::FilesystemTransferFailure::Cancelled ||
+        transfer.failure == internal::FilesystemTransferFailure::MountedSource) {
+        return errorResult(FileOperationStatus::Failed, transfer.detail);
+    }
+    const auto reason = transfer.error ? transfer.error.message() : std::string{};
+    const auto detail = transfer.detail.empty() ? reason : transfer.detail + (reason.empty() ? "" : "\n" + reason);
+    return errorResult(FileOperationStatus::Failed, std::string(operation) + " failed: " + detail);
+}
+
+bool sameVolume(const internal::RemovableVolume& a, const internal::RemovableVolume& b)
+{
+    return a.mount.id == b.mount.id && a.mount.target == b.mount.target && a.mount.deviceNumber == b.mount.deviceNumber;
+}
+
+void numberDuplicateVolumes(std::vector<internal::RemovableVolume>& volumes,
+                            const std::vector<internal::RemovableVolume>& previous)
+{
+    for (auto& drive : volumes) {
+        const auto old = std::find_if(previous.begin(), previous.end(), [&](const auto& old) {
+            return sameVolume(old, drive) && old.name == drive.name;
+        });
+        drive.displayNumber = old == previous.end() ? 0 : old->displayNumber;
+    }
+    for (auto& drive : volumes) {
+        if (drive.displayNumber) continue;
+        const auto matches = [&](const auto& other) { return other.name == drive.name; };
+        if (std::count_if(volumes.begin(), volumes.end(), matches) <= 1) continue;
+        unsigned number = 1;
+        while (std::any_of(volumes.begin(), volumes.end(), [&](const auto& other) {
+            return matches(other) && other.displayNumber == number;
+        })) ++number;
+        drive.displayNumber = number;
+    }
 }
 
 }  // namespace
 
-FileBrowserModel::FileBrowserModel(std::string start_directory)
-    : _current_directory(normalizeDirectoryPath(start_directory.empty() ? defaultStartDirectory() : start_directory))
+FileBrowserModel::FileBrowserModel(std::string start_directory, std::vector<internal::RemovableVolume> volumes)
+    : _current_directory(normalizeDirectoryPath(start_directory.empty() ? defaultStartDirectory() : start_directory)),
+      _volumes(std::move(volumes))
 {
+    if (!_volumes.empty()) {
+        numberDuplicateVolumes(_volumes, {});
+        showPlaces();
+    }
 }
 
 const FileEntry* FileBrowserModel::selectedEntry() const
@@ -130,20 +191,182 @@ FileEntry FileBrowserModel::entryWithMetadata(const FileEntry& entry) const
 
 bool FileBrowserModel::canGoBack() const
 {
-    if (!_history.empty()) {
-        return true;
-    }
-
-    const fs::path current = fs::path(_current_directory.get());
-    const fs::path parent  = current.parent_path();
-    return !parent.empty() && parent != current;
+    return !inPlaces();
 }
 
 void FileBrowserModel::refresh(bool preserveSelected)
 {
-    const FileEntry* selected       = selectedEntry();
+    const auto* selected = selectedEntry();
     const std::string preferredPath = preserveSelected && selected ? selected->path : "";
-    (void)refreshSelecting(preferredPath);
+    if (inPlaces()) {
+        refreshPlaces(preferredPath);
+    } else {
+        (void)refreshSelecting(preferredPath);
+    }
+}
+
+void FileBrowserModel::showPlaces(const std::string& preferredPath)
+{
+    _history.clear();
+    _current_mount_id = 0;
+    _current_directory.set("");
+    _status.set("Ready");
+    refreshPlaces(preferredPath);
+}
+
+const internal::RemovableVolume* FileBrowserModel::volume(uint64_t mountId) const
+{
+    const auto it = std::find_if(_volumes.begin(), _volumes.end(), [mountId](const auto& item) {
+        return item.mount.id == mountId;
+    });
+    return it == _volumes.end() ? nullptr : &*it;
+}
+
+VolumeChanges FileBrowserModel::updateVolumes(std::vector<internal::RemovableVolume> volumes)
+{
+    const auto contains = [](const auto& list, const auto& item) {
+        return std::any_of(list.begin(), list.end(), [&item](const auto& other) {
+            return sameVolume(item, other);
+        });
+    };
+
+    numberDuplicateVolumes(volumes, _volumes);
+    VolumeChanges changes;
+    for (const auto& item : volumes) {
+        if (!contains(_volumes, item)) {
+            changes.arrived.push_back(item);
+        }
+    }
+    for (const auto& item : _volumes) {
+        if (!contains(volumes, item)) {
+            changes.removed.push_back(item);
+            changes.leftVolume |= item.mount.id == _current_mount_id;
+        }
+    }
+    _volumes = std::move(volumes);
+
+    // Keep the closest remaining drive selected if a selected volume disappears.
+    std::string neighbor;
+    const auto* selection = selectedEntry();
+    const auto oldId = _current_mount_id ? _current_mount_id : (selection && selection->mountRoot ? selection->mountId : 0);
+    if (oldId && !volume(oldId)) {
+        const auto old = std::find_if(changes.removed.begin(), changes.removed.end(), [oldId](const auto& item) {
+            return item.mount.id == oldId;
+        });
+        const auto next = old == changes.removed.end() ? _volumes.begin() :
+            std::lower_bound(_volumes.begin(), _volumes.end(), *old, [](const auto& a, const auto& b) {
+                return a.name == b.name ? a.mount.target < b.mount.target : a.name < b.name;
+            });
+        if (!_volumes.empty()) neighbor = (next == _volumes.end() ? _volumes.back() : *next).mount.target.string();
+    }
+    // Navigation can reach a recently mounted drive before the next poll.
+    if (changes.leftVolume || (_current_mount_id && !volume(_current_mount_id))) {
+        changes.leftVolume = true;
+        showPlaces(neighbor);
+    } else if (inPlaces()) {
+        if (neighbor.empty()) refresh();
+        else refreshPlaces(neighbor);
+    }
+    return changes;
+}
+
+FileOperationResult FileBrowserModel::openRemovableVolumes()
+{
+    if (_volumes.empty()) {
+        return disconnected();
+    }
+    if (_volumes.size() == 1) {
+        return openVolume(_volumes.front().mount.id);
+    }
+    const auto* selected = selectedEntry();
+    const auto* current = volume(_current_mount_id);
+    const auto* preferred = inPlaces() && selected && selected->mountRoot ? volume(selected->mountId) : current;
+    showPlaces((preferred ? preferred : &_volumes.front())->mount.target.string());
+    return {};
+}
+
+FileOperationResult FileBrowserModel::openVolume(uint64_t mountId, bool rememberLocation)
+{
+    const auto* drive = volume(mountId);
+    if (!drive || !internal::volumePresent(mountId)) {
+        return disconnected();
+    }
+    if (rememberLocation) return goToDirectory(drive->mount.target.string(), true);
+    auto result = goToDirectory(drive->mount.target.string(), false);
+    if (result) {
+        _history.clear();
+    }
+    return result;
+}
+
+std::string FileBrowserModel::volumeDisplayName(uint64_t mountId) const
+{
+    const auto* drive = volume(mountId);
+    return drive ? drive->displayName() : std::string{};
+}
+
+void FileBrowserModel::refreshPlaces(const std::string& preferredPath)
+{
+    std::vector<FileEntry> list;
+    const auto addLocation = [&list](const fs::path& path, std::string name) -> FileEntry& {
+        FileEntry entry;
+        entry.path = path.string();
+        entry.name = std::move(name);
+        entry.kind = FileKind::Directory;
+        entry.directory = true;
+        entry.icon = "folder";
+        list.push_back(std::move(entry));
+        return list.back();
+    };
+    for (const auto& volume : _volumes) {
+        auto& entry = addLocation(volume.mount.target, volumeDisplayName(volume.mount.id));
+        entry.mountId = volume.mount.id;
+        entry.mountRoot = true;
+        entry.freeBytes = freeSpace(volume.mount.target);
+    }
+    if (const auto* user = getpwuid(getuid()); user && user->pw_dir) {
+        addLocation(user->pw_dir, "Home");
+    }
+    addLocation("/", "File system");
+    const auto& previous = _entries.get();
+    if (previous.size() != list.size() ||
+        !std::equal(list.begin(), list.end(), previous.begin(), [](const auto& a, const auto& b) {
+            return a.path == b.path && a.name == b.name && a.mountId == b.mountId && a.freeBytes == b.freeBytes;
+        })) {
+        setEntries(std::move(list), preferredPath);
+    } else if (!preferredPath.empty()) {
+        const auto it = std::find_if(previous.begin(), previous.end(), [&preferredPath](const auto& entry) {
+            return entry.path == preferredPath;
+        });
+        if (it != previous.end()) {
+            _selected_index.set(static_cast<int>(it - previous.begin()));
+        }
+    }
+}
+
+FileOperationResult FileBrowserModel::ejectSelected()
+{
+    const auto* entry = selectedEntry();
+    if (!entry || !entry->mountRoot) {
+        return errorResult(FileOperationStatus::InvalidSelection, "Select a removable drive");
+    }
+    const auto* drive = volume(entry->mountId);
+    const auto result = drive ? ejectDrive(entry->mountId, {}, drive->displayNumber) : disconnected();
+    updateVolumes(internal::removableVolumes());
+    refresh(true);
+    return result;
+}
+
+FileOperationResult FileBrowserModel::ejectDrive(uint64_t mountId, const internal::CommandOutput& progress,
+                                                 unsigned displayNumber)
+{
+    for (auto& volume : internal::removableVolumes()) {
+        if (volume.mount.id == mountId) {
+            volume.displayNumber = displayNumber;
+            return internal::ejectVolume(volume, progress);
+        }
+    }
+    return disconnected();
 }
 
 FileOperationResult FileBrowserModel::readDirectoryEntries(const std::string& directory,
@@ -152,35 +375,46 @@ FileOperationResult FileBrowserModel::readDirectoryEntries(const std::string& di
     entries.clear();
     std::error_code ec;
 
-    // libstdc++ may silently turn an unreadable directory into an empty
-    // iterator when skip_permission_denied is requested. Probe the directory
-    // itself without that option first so callers can report the real error;
-    // the second iterator still tolerates an inaccessible child entry.
-    {
-        const fs::directory_iterator probe(directory, fs::directory_options::none, ec);
-        if (ec) {
-            const FileOperationResult result = filesystemError("Read", ec);
-            spdlog::warn("FileBrowserModel: failed to open directory {}: {}", directory, ec.message());
-            return result;
-        }
-        (void)probe;
-    }
-    ec.clear();
-
-    for (const auto& item : fs::directory_iterator(directory, fs::directory_options::skip_permission_denied, ec)) {
-        entries.push_back(makeEntry(item, false));
-    }
-
-    if (ec) {
-        const FileOperationResult result = filesystemError("Read", ec);
-        spdlog::warn("FileBrowserModel: failed to read {}: {}", directory, ec.message());
-        std::sort(entries.begin(), entries.end(), [](const FileEntry& lhs, const FileEntry& rhs) {
-            if (lhs.directory != rhs.directory) {
-                return lhs.directory && !rhs.directory;
+    const auto volumes = internal::removableVolumes();
+    const fs::directory_iterator end;
+    fs::directory_iterator item(directory, ec);
+    while (!ec && item != end) {
+        auto entry = makeEntry(*item, false);
+        std::error_code typeError;
+        const auto type = item->status(typeError);
+        entry.special = !typeError && type.type() != fs::file_type::regular &&
+                        type.type() != fs::file_type::directory;
+        constexpr std::string_view stagePrefix = ".files-transfer-v2-";
+        if (entry.directory && entry.name.compare(0, stagePrefix.size(), stagePrefix) == 0 &&
+            !fs::is_symlink(item->symlink_status(typeError))) {
+            const std::string_view suffix = std::string_view(entry.name).substr(stagePrefix.size());
+            size_t fields = 0;
+            size_t digits = 0;
+            for (char character : suffix) {
+                if (character >= '0' && character <= '9') {
+                    ++digits;
+                } else if (character == '-' && digits) {
+                    ++fields;
+                    digits = 0;
+                } else {
+                    fields = 3;
+                    break;
+                }
             }
-            return lhs.name < rhs.name;
-        });
-        return result;
+            entry.incompleteCopy = fields == 2 && digits != 0;
+        }
+        for (const auto& volume : volumes) {
+            if (internal::volumeContains(volume, entry.path)) {
+                entry.mountId = volume.mount.id;
+                entry.mountRoot = entry.path == volume.mount.target;
+            }
+        }
+        entries.push_back(std::move(entry));
+        item.increment(ec);
+    }
+    if (ec) {
+        spdlog::warn("FileBrowserModel: failed to read {}: {}", directory, ec.message());
+        return filesystemError("Read", ec);
     }
 
     std::sort(entries.begin(), entries.end(), [](const FileEntry& lhs, const FileEntry& rhs) {
@@ -194,6 +428,19 @@ FileOperationResult FileBrowserModel::readDirectoryEntries(const std::string& di
 
 FileOperationResult FileBrowserModel::refreshSelecting(const std::string& preferredPath)
 {
+    if (_current_mount_id == 0) {
+        for (const auto& volume : internal::removableVolumes()) {
+            if (internal::volumeContains(volume, _current_directory.get())) {
+                _current_mount_id = volume.mount.id;
+                break;
+            }
+        }
+    }
+    if (!internal::volumePresent(_current_mount_id)) {
+        showPlaces();
+        _status.set("Drive disconnected");
+        return disconnected();
+    }
     std::vector<FileEntry> list;
     const FileOperationResult result = readDirectoryEntries(_current_directory.get(), list);
     if (!result) {
@@ -272,36 +519,65 @@ FileOperationResult FileBrowserModel::openSelected(FileEntry* openedFile)
         return errorResult(FileOperationStatus::InvalidSelection, "No file selected");
     }
 
+    if (!internal::volumePresent(selected->mountId)) {
+        refresh(true);
+        return disconnected();
+    }
     if (selected->directory) {
         // Keep the spelling used by the directory entry in history.  A
         // symlinked directory is canonicalized for browsing, but returning
         // should still highlight that exact entry in the parent directory.
-        return goToDirectory(selected->path, true, selected->path);
+        const auto path = selected->path;
+        auto result = goToDirectory(path, true, path);
+        if (!result) {
+            std::error_code error;
+            if (fs::exists(path, error) && !fs::is_directory(path, error) && !error) {
+                result.message = "Item is no longer a folder";
+            }
+            refreshSelecting(path);
+        }
+        return result;
     }
 
     if (openedFile) {
         *openedFile = entryWithMetadata(*selected);
+        openedFile->mountId = selected->mountId;
     }
     return FileOperationResult{};
 }
 
 FileOperationResult FileBrowserModel::goBack()
 {
+    if (inPlaces()) {
+        return errorResult(FileOperationStatus::NotSupported, "Already at Places");
+    }
+    if (!internal::volumePresent(_current_mount_id)) {
+        showPlaces();
+        return disconnected();
+    }
+
+    const fs::path current(_current_directory.get());
+    const auto* drive = volume(_current_mount_id);
+    if (((drive && current == drive->mount.target) || current == current.root_path()) && _history.empty()) {
+        showPlaces(current.string());
+        return {};
+    }
+    while (!_history.empty() && !internal::volumePresent(_history.back().mountId)) {
+        _history.pop_back();
+    }
     if (!_history.empty()) {
-        const HistoryEntry& previous     = _history.back();
+        const HistoryEntry previous = _history.back();
+        if (previous.directory.empty()) {
+            showPlaces(previous.selectedPath);
+            return {};
+        }
         const FileOperationResult result = goToDirectory(previous.directory, false, previous.selectedPath);
         if (result) {
             _history.pop_back();
         }
         return result;
     }
-
-    fs::path current(_current_directory.get());
-    const fs::path parent = current.parent_path();
-    if (parent.empty() || parent == current) {
-        return errorResult(FileOperationStatus::NotSupported, "Already at root");
-    }
-    return goToDirectory(pathString(parent), false, pathString(current));
+    return goToDirectory(pathString(current.parent_path()), false, pathString(current));
 }
 
 FileOperationResult FileBrowserModel::goToDirectory(const std::string& path, bool pushHistory)
@@ -322,7 +598,7 @@ FileOperationResult FileBrowserModel::goToDirectory(const std::string& path, boo
     const std::string targetPath = pathString(ec ? requestedPath : target);
     ec.clear();
     if (!fs::is_directory(targetPath, ec)) {
-        if (ec) {
+        if (ec && ec != std::errc::no_such_file_or_directory) {
             return filesystemError("Open", ec);
         }
         return errorResult(FileOperationStatus::NotFound, "Folder not found");
@@ -337,7 +613,15 @@ FileOperationResult FileBrowserModel::goToDirectory(const std::string& path, boo
 
     const std::string previous = _current_directory.get();
     if (pushHistory && previous != targetPath) {
-        _history.push_back({previous, pathString(requestedPath)});
+        const auto* entry = selectedEntry();
+        _history.push_back({previous, entry ? entry->path : pathString(requestedPath), _current_mount_id});
+    }
+    _current_mount_id = 0;
+    for (const auto& volume : internal::removableVolumes()) {
+        if (internal::volumeContains(volume, targetPath)) {
+            _current_mount_id = volume.mount.id;
+            break;
+        }
     }
 
     _current_directory.set(targetPath);
@@ -348,21 +632,7 @@ FileOperationResult FileBrowserModel::goToDirectory(const std::string& path, boo
 
 FileOperationResult FileBrowserModel::copyEntryTo(const FileEntry& entry, const std::string& destinationDirectory)
 {
-    const fs::path source(entry.path);
-    const std::string sourceName = entry.name;
-    const internal::FilesystemTransferResult transfer =
-        internal::copyPathToDirectory(source, fs::path(destinationDirectory));
-    if (!transfer) {
-        spdlog::warn("FileBrowserModel: copy failed source='{}' directory='{}' reason={} detail={}", source.string(),
-                     destinationDirectory, internal::filesystemTransferFailureName(transfer.failure), transfer.detail);
-        return transferError("Copy", transfer);
-    }
-
-    refresh(false);
-    _status.set("Copied " + sourceName);
-    spdlog::info("FileBrowserModel: copied source='{}' destination='{}'", source.string(),
-                 transfer.destination.string());
-    return FileOperationResult{};
+    return transferEntry(entry, destinationDirectory, false);
 }
 
 FileOperationResult FileBrowserModel::copySelectedTo(const std::string& destinationDirectory)
@@ -377,24 +647,104 @@ FileOperationResult FileBrowserModel::copySelectedTo(const std::string& destinat
 
 FileOperationResult FileBrowserModel::moveEntryTo(const FileEntry& entry, const std::string& destinationDirectory)
 {
-    const fs::path source(entry.path);
-    const std::string sourceName = entry.name;
-    const internal::FilesystemTransferResult transfer =
-        internal::movePathToDirectory(source, fs::path(destinationDirectory));
-    if (transfer.failure == internal::FilesystemTransferFailure::SamePath) {
-        return errorResult(FileOperationStatus::InvalidSelection, "Already here");
-    }
-    if (!transfer) {
-        spdlog::warn("FileBrowserModel: move failed source='{}' directory='{}' reason={} detail={}", source.string(),
-                     destinationDirectory, internal::filesystemTransferFailureName(transfer.failure), transfer.detail);
-        return transferError("Cut", transfer);
-    }
+    return transferEntry(entry, destinationDirectory, true);
+}
 
-    refresh(false);
-    _status.set("Moved " + sourceName);
-    spdlog::info("FileBrowserModel: moved source='{}' destination='{}'", source.string(),
-                 transfer.destination.string());
-    return FileOperationResult{};
+FileOperationResult FileBrowserModel::transferEntry(const FileEntry& entry, const std::string& destinationDirectory,
+                                                    bool move)
+{
+    const auto destinationMountId = destinationDirectory == _current_directory.get() ? _current_mount_id : 0;
+    const auto transfer = performTransfer(entry, destinationDirectory, destinationMountId, move);
+    if (transfer.operation) {
+        refreshSelecting(transfer.destinationPath);
+        _status.set(transfer.operation.message);
+    }
+    return transfer.operation;
+}
+
+FileTransferResult FileBrowserModel::performTransfer(const FileEntry& entry, const std::string& destinationDirectory,
+                                                     uint64_t destinationMountId, bool move,
+                                                     internal::TransferControl* control, std::string_view duplicateWord)
+{
+    if (entry.mountRoot || destinationDirectory.empty()) {
+        return {errorResult(FileOperationStatus::InvalidSelection, "Open a folder first")};
+    }
+    const fs::path source(entry.path);
+    if (!destinationMountId) {
+        for (const auto& volume : internal::removableVolumes()) {
+            if (internal::volumeContains(volume, destinationDirectory)) {
+                destinationMountId = volume.mount.id;
+                break;
+            }
+        }
+    }
+    const auto sourceParent = source.parent_path().empty() ? fs::path(".") : source.parent_path();
+    const internal::TransferDirectory sourceDirectory(sourceParent, entry.mountId);
+    const internal::TransferDirectory destination(destinationDirectory, destinationMountId);
+    FileTransferResult result;
+    const auto connected = [&] {
+        if (!sourceDirectory.connected()) {
+            result.disconnectedSource = entry.mountId;
+        }
+        if (!destination.connected()) {
+            result.disconnectedDestination = destinationMountId;
+        }
+        return !result.disconnectedSource && !result.disconnectedDestination;
+    };
+    if (!connected()) {
+        result.operation = disconnected();
+        return result;
+    }
+    const auto pinnedSource = sourceDirectory.path() / source.filename();
+    const auto transfer = move ? internal::movePathToDirectory(pinnedSource, destination.path(), connected, control)
+                               : internal::copyPathToDirectory(pinnedSource, destination.path(), connected, control,
+                                                               duplicateWord);
+    result.destinationState = transfer.destinationState;
+    if (!transfer) {
+        if (!transfer.destination.empty()) {
+            result.destinationPath = pathString(fs::path(destinationDirectory) / transfer.destination.filename());
+        }
+        std::error_code sourceError;
+        result.sourceStillPresent = sourceDirectory.connected() &&
+            fs::exists(fs::symlink_status(pinnedSource, sourceError));
+    }
+    if (!transfer && !connected()) {
+        result.operation = disconnected();
+        result.destinationState = transfer.failure == internal::FilesystemTransferFailure::SourceCleanupFailed
+                                      ? internal::TransferDestination::Published : transfer.destinationState;
+    } else if (transfer.failure == internal::FilesystemTransferFailure::SamePath) {
+        result.operation = errorResult(FileOperationStatus::InvalidSelection, "Already here");
+    } else if (!transfer) {
+        result.operation = transferError(move ? "Cut" : "Copy", transfer);
+    } else {
+        const auto name = transfer.destination.filename();
+        result.destinationPath = pathString(fs::path(destinationDirectory) / name);
+        const auto* verb = move ? "Moved " : name != source.filename() ? "Created copy " : "Copied ";
+        result.operation = {FileOperationStatus::Ok, std::string(verb) + name.string()};
+        result.destinationState = internal::TransferDestination::Published;
+    }
+    return result;
+}
+
+FileOperationResult FileBrowserModel::createDirectory(const std::string& name)
+{
+    if (inPlaces()) return errorResult(FileOperationStatus::InvalidSelection, "Open a folder first");
+    if (name.empty() || name == "." || name == ".." || name.find('/') != std::string::npos ||
+        name.find('\0') != std::string::npos) {
+        return errorResult(FileOperationStatus::InvalidSelection, "Invalid name");
+    }
+    const internal::TransferDirectory directory(_current_directory.get(), _current_mount_id);
+    if (!directory.connected()) return disconnected();
+    std::error_code error;
+    if (!fs::create_directory(directory.path() / name, error)) {
+        if (!error || error == std::errc::file_exists) {
+            return errorResult(FileOperationStatus::Failed, "Name already exists");
+        }
+        return filesystemError("Create folder", error);
+    }
+    refreshSelecting(pathString(fs::path(_current_directory.get()) / name));
+    _status.set("Created " + name);
+    return {};
 }
 
 FileOperationResult FileBrowserModel::renameSelectedTo(const std::string& name)
@@ -403,7 +753,12 @@ FileOperationResult FileBrowserModel::renameSelectedTo(const std::string& name)
     if (!selected) {
         return errorResult(FileOperationStatus::InvalidSelection, "No file selected");
     }
-    const std::string oldName = selected->name;
+    if (inPlaces() || selected->mountRoot) {
+        return errorResult(FileOperationStatus::NotSupported, "Cannot rename a location");
+    }
+    if (!internal::volumePresent(selected->mountId)) {
+        return disconnected();
+    }
     if (name.empty() || name == "." || name == ".." || name.find('/') != std::string::npos) {
         return errorResult(FileOperationStatus::InvalidSelection, "Invalid name");
     }
@@ -422,13 +777,17 @@ FileOperationResult FileBrowserModel::renameSelectedTo(const std::string& name)
         return errorResult(FileOperationStatus::Failed, "Name already exists");
     }
 
-    fs::rename(source, destination, ec);
+    const internal::TransferDirectory directory(source.parent_path(), selected->mountId);
+    if (!directory.connected()) {
+        return disconnected();
+    }
+    fs::rename(directory.path() / source.filename(), directory.path() / destination.filename(), ec);
     if (ec) {
         return filesystemError("Rename", ec);
     }
 
     refreshSelecting(pathString(destination));
-    _status.set("Renamed " + oldName);
+    _status.set("Renamed to " + name);
     return FileOperationResult{};
 }
 
@@ -439,15 +798,41 @@ FileOperationResult FileBrowserModel::deleteSelected()
         return errorResult(FileOperationStatus::InvalidSelection, "No file selected");
     }
 
-    const std::string deletedPath = selected->path;
+    if (inPlaces() || selected->mountRoot) {
+        return errorResult(FileOperationStatus::NotSupported, "Cannot delete a location");
+    }
+    if (!internal::volumePresent(selected->mountId)) {
+        return disconnected();
+    }
+    const fs::path deletedPath = selected->path;
     const std::string deletedName = selected->name;
+    const internal::TransferDirectory directory(deletedPath.parent_path(), selected->mountId);
+    if (!directory.connected()) {
+        return disconnected();
+    }
     std::error_code ec;
-    fs::remove_all(deletedPath, ec);
+    fs::path mounted;
+    if (internal::containsMountPoint(directory.path() / deletedPath.filename(), ec, &mounted)) {
+        return errorResult(FileOperationStatus::NotSupported,
+                           "Folder contains a mounted filesystem\n" + mounted.string());
+    }
+    if (ec) {
+        return filesystemError("Cannot check for mounted filesystems", ec);
+    }
+    fs::remove_all(directory.path() / deletedPath.filename(), ec);
+    if (!directory.connected()) {
+        return errorResult(FileOperationStatus::Failed, "Drive disconnected during deletion");
+    }
     if (ec) {
         return filesystemError("Delete", ec);
     }
 
-    refresh(false);
+    const auto& before = _entries.get();
+    const size_t index = static_cast<size_t>(_selected_index.get());
+    std::string neighbor;
+    if (index + 1 < before.size()) neighbor = before[index + 1].path;
+    else if (index > 0) neighbor = before[index - 1].path;
+    refreshSelecting(neighbor);
     _status.set("Deleted " + deletedName);
     return FileOperationResult{};
 }
@@ -460,7 +845,7 @@ FileEntry FileBrowserModel::makeEntry(const fs::directory_entry& item, bool incl
     const std::string extension = directory ? "" : normalizedExtension(fsPath.extension().string());
 
     uint64_t size = 0;
-    if (includeMetadata && !directory) {
+    if (!directory && item.is_regular_file(ec)) {
         ec.clear();
         size = static_cast<uint64_t>(item.file_size(ec));
         if (ec) {

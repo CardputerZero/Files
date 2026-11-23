@@ -32,6 +32,8 @@ public:
     {
         (void)nowMs;
     }
+    virtual void setNoticeHeight(int) {}
+    virtual bool usesWideFooter() const { return false; }
     virtual bool shouldClose() const
     {
         return false;
