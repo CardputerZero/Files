@@ -1,6 +1,6 @@
 #include "assets/assets.h"
-
-#include <lvgl.h>
+#include "assets/font_assets.hpp"
+#include "src/misc/lv_text_private.h"
 
 #include <array>
 #include <cstdint>
@@ -8,6 +8,8 @@
 #include <iostream>
 
 namespace {
+
+constexpr char kCzechFilename[] = u8"Příliš žluťoučký kůň úpěl ďábelské ódy.txt";
 
 constexpr std::array<std::uint32_t, 8> kRequiredCodepoints{
     0x0100,  // Latin capital A with macron
@@ -20,35 +22,36 @@ constexpr std::array<std::uint32_t, 8> kRequiredCodepoints{
     0xFFE5,  // Fullwidth yen sign
 };
 
-void requireGlyph(const lv_font_t* font, std::uint32_t codepoint, const char* context)
+struct Font {
+    const lv_font_t* font;
+    const char* name;
+};
+
+void requireGlyph(Font face, std::uint32_t codepoint, bool requirePrimary = false)
 {
     lv_font_glyph_dsc_t glyph{};
-    const bool found = lv_font_get_glyph_dsc(font, &glyph, codepoint, 0);
-    if (found && !glyph.is_placeholder && glyph.resolved_font) {
+    const bool found = lv_font_get_glyph_dsc(face.font, &glyph, codepoint, 0);
+    if (found && !glyph.is_placeholder && glyph.resolved_font &&
+        (!requirePrimary || glyph.resolved_font == face.font)) {
         return;
     }
 
-    std::cerr << "FAIL: missing U+" << std::hex << std::uppercase << codepoint << " in " << context << '\n';
+    std::cerr << "FAIL: missing U+" << std::hex << std::uppercase << codepoint << " in " << face.name << '\n';
     std::exit(1);
 }
 
-void requireUiCoverage(const lv_font_t* font, const char* context)
+void requireUiCoverage(Font face)
 {
     for (const std::uint32_t codepoint : kRequiredCodepoints) {
-        requireGlyph(font, codepoint, context);
+        requireGlyph(face, codepoint);
     }
 }
 
-void requireTextCoverage(const lv_font_t& mono_source, const lv_font_t& sc_source, const char* context)
+void requireCzechFilename(Font face)
 {
-    lv_font_t sc = sc_source;
-    sc.fallback  = nullptr;
-
-    lv_font_t mono = mono_source;
-    mono.fallback  = &sc;
-
-    for (const std::uint32_t codepoint : kRequiredCodepoints) {
-        requireGlyph(&mono, codepoint, context);
+    std::uint32_t offset = 0;
+    while (kCzechFilename[offset] != '\0') {
+        requireGlyph(face, lv_text_encoded_next(kCzechFilename, &offset), true);
     }
 }
 
@@ -56,10 +59,35 @@ void requireTextCoverage(const lv_font_t& mono_source, const lv_font_t& sc_sourc
 
 int main()
 {
-    requireUiCoverage(&font_noto_sans_sc_semibold_10, "10px UI font");
-    requireUiCoverage(&font_noto_sans_sc_semibold_12, "12px UI font");
-    requireUiCoverage(&font_noto_sans_sc_semibold_14, "14px UI font");
-    requireTextCoverage(font_noto_sans_mono_semibold_12, font_noto_sans_sc_semibold_12, "12px mono fallback");
-    requireTextCoverage(font_noto_sans_mono_semibold_14, font_noto_sans_sc_semibold_14, "text preview font");
+    const std::array<Font, 9> faces{{
+        {files::uiFont10(), "Noto Sans SC 10px"},
+        {files::uiFont12(), "Noto Sans 12px"},
+        {files::uiFont14(), "Noto Sans 14px"},
+        {&font_noto_sans_jp_semibold_10, "Noto Sans JP 10px"},
+        {&font_noto_sans_jp_semibold_12, "Noto Sans JP 12px"},
+        {&font_noto_sans_jp_semibold_14, "Noto Sans JP 14px"},
+        {files::uiMonoFont12(), "Noto Sans Mono 12px"},
+        {files::uiMonoFont14(), "Noto Sans Mono 14px"},
+        {LV_FONT_DEFAULT, "LVGL default Montserrat 14px"},
+    }};
+    for (const Font face : faces) {
+        requireCzechFilename(face);
+        for (std::uint32_t codepoint = 0x00A0; codepoint <= 0x017F; ++codepoint) {
+            requireGlyph(face, codepoint, true);
+        }
+    }
+
+    requireUiCoverage({&font_noto_sans_sc_semibold_10, "Noto Sans SC 10px"});
+    requireUiCoverage({&font_noto_sans_sc_semibold_12, "Noto Sans SC 12px"});
+    requireUiCoverage({&font_noto_sans_sc_semibold_14, "Noto Sans SC 14px"});
+    requireUiCoverage({files::uiMonoFont12(), "12px mono fallback"});
+    requireUiCoverage({files::textPreviewFont(), "text preview"});
+    requireCzechFilename({files::textPreviewFont(), "text preview"});
+
+    const Font defaultFont{LV_FONT_DEFAULT, "LVGL default symbols"};
+    for (const char* symbol : {LV_SYMBOL_OK, LV_SYMBOL_FILE, LV_SYMBOL_DIRECTORY, LV_SYMBOL_WIFI}) {
+        std::uint32_t offset = 0;
+        requireGlyph(defaultFont, lv_text_encoded_next(symbol, &offset), true);
+    }
     return 0;
 }
