@@ -55,6 +55,8 @@ private:
     PreviewView _preview_view;
     std::unique_ptr<PreviewPage> _help_page;
     lv_obj_t* _exit_hint      = nullptr;
+    std::string _notice_text;
+    int _notice_y = -1;
     lv_obj_t* _volume_notice  = nullptr;
     lv_obj_t* _preview_usb_hint = nullptr;
     ViewModel* _current_vm    = nullptr;
@@ -99,6 +101,7 @@ private:
     void hideExitHint();
     void releaseEscPress();
     bool browserEscapeHandledByView();
+    bool canHoldEscToExit();
     static void onRouteChanged(void* context, const PageId& page);
     static void onKeyboardEvent(lv_event_t* event);
 #if LV_USE_SDL

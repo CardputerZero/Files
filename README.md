@@ -4,14 +4,14 @@ File browser and preview app for M5Stack CardputerZero.
 
 ## Features
 
-- Browse folders with animated file menu and long-name scrolling
+- Browse folders with five-row lists, amber focus, and middle-ellipsized names
 - Copy, cut, paste, rename, delete, and inspect file metadata
 - Browse mounted removable drives and safely eject them from Places
 - Review and install local Debian packages after confirmation
 - Preview text files with CJK-capable Noto Sans fonts and scroll progress
 - Preview images with pan, zoom, counter-clockwise rotation, fullscreen, and GIF support
 - Play audio files with seek and 1x/2x/5x speed controls
-- Play video files fullscreen through `ffmpeg` on the device framebuffer
+- Play video files with `ffmpeg` in the LVGL preview, with pause and seek controls
 - Fall back to an info preview for unsupported file types
 
 ## Dependencies
@@ -64,9 +64,8 @@ npm install -g lv_font_conv@1.5.3
 python3 src/assets/convert_fonts.py
 ```
 
-Files uses Noto Sans SemiBold for 12 px and 14 px UI text, with Noto Sans SC
-and JP SemiBold for CJK coverage. It uses Noto Sans Mono SemiBold for
-monospaced text and Montserrat Medium 14 px for the LVGL default.
+Files uses Noto Sans SC and JP SemiBold for UI text, Noto Sans Mono SemiBold
+for monospaced text, and Montserrat Medium 14 px for the LVGL default.
 The Noto builds supplement the missing Latin glyphs with
 [Noto Sans SemiBold](https://github.com/notofonts/noto-fonts/blob/ffebf8c1ee449e544955a7e813c54f9b73848eac/hinted/ttf/NotoSans/NotoSans-SemiBold.ttf).
 The Montserrat build uses the same source and Font Awesome 5 symbols as LVGL.
@@ -147,8 +146,7 @@ Open a `.deb` with **Enter**, scroll the package details with **F/X** or the
 arrow keys, and press **Enter** to install the reviewed package. **Esc** cancels
 the review. Installing uses the normal Debian package manager with sudo
 authorization. Packages for other architectures cannot be confirmed unless that
-architecture is configured on the system. Installation progress follows the
-message locale (English or Czech). The review accepts archives up to
+architecture is configured on the system. The review accepts archives up to
 64 MiB and checks available space in the `/var/tmp` directory before staging.
 
 Without Store, the package manager has a one-hour installation timeout by
@@ -160,8 +158,10 @@ its recovery record and protected archive. Review the output of `dpkg --audit` a
 before retrying. An administrator can remove the reported staging directory
 after resolving the package state.
 
-Video preview uses `ffmpeg` directly on CardputerZero. Audio is sent to the
-PulseAudio sink named by `FILES_VIDEO_PULSE_SINK`, or to `default` when unset.
+Video preview decodes RGB565 frames through `ffmpeg` on CardputerZero and
+displays them in LVGL. The paused clock follows the last displayed frame.
+Audio is sent to the PulseAudio sink named by `FILES_VIDEO_PULSE_SINK`, or to
+`default` when unset.
 
 Keyboard input debug logs can be enabled with:
 
@@ -197,8 +197,22 @@ sudo unshare --mount --propagation private ./tests/check_loop_mount.sh ./build/s
 ```
 
 The loop test uses a temporary ext4 image by default. Pass `vfat` to run
-the same copy and disconnection checks on FAT. The storage hardening script
-uses a private mount namespace to cover cross-filesystem moves and errors.
-The SDL Escape test requires Xvfb, libXtst, and Pillow. The package tests
-build local fixtures and simulate unsatisfied dependencies. The hardening
-script also takes the SDL executable as its second argument.
+the same copy and disconnection checks on FAT. The package tests build local
+fixtures and simulate unsatisfied dependencies. The storage hardening script
+takes the probe and SDL executable as its arguments. The SDL Escape test
+requires Xvfb, libXtst, and Pillow.
+
+### CardputerZero appearance and language
+
+Files uses the system message locale by default. Use **Tab → Language** to
+select English, Czech, or the system locale. The preference lives in
+`$XDG_CONFIG_HOME/cardputer-files/language` (or `~/.config/cardputer-files/language`).
+
+The amber row is the current selection. The file list shows five complete
+rows on the 320 × 170 display. Open **Details** to read a shortened name or
+path in full. The **New folder** action is available in the directory menu.
+**Paste** opens a confirmation for the pending copy or move.
+
+The six browser icons in `src/assets/images/` identified by
+`src/assets/generate_browser_icons.py` are original drawings for Files.
+Regenerate them with `./.venv/bin/python src/assets/generate_browser_icons.py`.

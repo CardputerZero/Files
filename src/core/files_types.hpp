@@ -77,6 +77,7 @@ struct FileOperationResult {
 struct PendingDeleteFile {
     bool active = false;
     FileEntry file;
+    bool emptyFolder = false;
 };
 
 struct PendingCopyFile {
@@ -89,6 +90,7 @@ struct PendingRenameFile {
     bool active = false;
     FileEntry file;
     std::string name;
+    bool creating = false;
 };
 
 const char* pageIdName(PageId page);

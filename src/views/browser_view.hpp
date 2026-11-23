@@ -2,11 +2,7 @@
 
 #include "view_models/browser_view_model.hpp"
 #include "views/view.hpp"
-#include <core/animation/animate_value/animate_value.hpp>
-#include <lvgl/lvgl_cpp/label.hpp>
-#include <lvgl/lvgl_cpp/obj.hpp>
 #include <memory>
-#include <vector>
 
 namespace files {
 
@@ -20,59 +16,43 @@ public:
     void onEnter(lv_obj_t* parent) override;
     void onExit() override;
     void tick(uint32_t nowMs) override;
+    int toastY(int height) const;
+    void setExternalToast(int y = 0, int height = 0);
 
 private:
-    class FilesMenu;
-    class ActionMenu;
-    class MenuCursor;
-    class DeleteConfirmDialog;
-    class RenameConfirmDialog;
-    class PackagePanel;
-    class StatusHud;
+    class Rows;
+    class Dialog;
 
     BrowserViewModel& _vm;
-    std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Container> _root;
-    std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Container> _path_bar;
-    std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Label> _path_label;
-    std::unique_ptr<FilesMenu> _file_list;
-    std::unique_ptr<ActionMenu> _action_menu;
-    std::unique_ptr<MenuCursor> _cursor;
-    std::unique_ptr<DeleteConfirmDialog> _delete_confirm_dialog;
-    std::unique_ptr<RenameConfirmDialog> _rename_confirm_dialog;
-    std::unique_ptr<PackagePanel> _package_panel;
-    std::unique_ptr<StatusHud> _status_hud;
-    bool _usb_hint_visible = false;
-    lv_obj_t* _key_bar = nullptr;
-    std::unique_ptr<MagicView> _magic_view;
-    uint32_t _magic_serial_seen = 0;
+    lv_obj_t* _root = nullptr;
+    lv_obj_t* _heading = nullptr;
+    lv_obj_t* _path = nullptr;
+    lv_obj_t* _free = nullptr;
+    lv_obj_t* _trailingKeys = nullptr;
+    lv_obj_t* _keys = nullptr;
+    lv_obj_t* _menu_error = nullptr;
+    lv_obj_t* _menu_error_icon = nullptr;
+    lv_obj_t* _menu_exit = nullptr;
+    lv_obj_t* _no_usb = nullptr;
+    lv_obj_t* _toast = nullptr;
+    std::unique_ptr<Rows> _files;
+    std::unique_ptr<Rows> _actions;
+    std::unique_ptr<Dialog> _dialog;
+    std::unique_ptr<MagicView> _magic;
+    uint32_t _magic_seen = 0;
+    uint32_t _toast_started = 0;
+    uint32_t _toast_duration = 0;
+    bool _usb = false;
+    bool _usb_action = false;
+    int _external_y = 0;
+    int _external_height = 0;
 
+    void updateChrome();
+    void updateMenu(bool open);
+    void updateDialog();
+    void updateStatus(const std::string& status);
+    void placeToast();
     void destroy();
-    void renderKeyBar();
-    void renderDirectory(const std::string& directory);
-    void renderEntries(const std::vector<FileEntry>& entries);
-    void renderSelectedIndex(int index);
-    void renderStatus(const std::string& status);
-    void renderEnterPressed(bool pressed);
-    void renderActionMenuOpen(bool open);
-    void renderActionMenuSelectedIndex(int index);
-    void renderPendingDelete(const PendingDeleteFile& pending);
-    void renderPendingRename(const PendingRenameFile& pending);
-    void renderPendingRenameName(const std::string& name);
-    void renderMagic(uint32_t magicSerial);
-    void updateCursorTarget();
-    static void onDirectoryChanged(void* context, const std::string& directory);
-    static void onEntriesChanged(void* context, const std::vector<FileEntry>& entries);
-    static void onSelectedIndexChanged(void* context, const int& index);
-    static void onStatusChanged(void* context, const std::string& status);
-    static void onEnterPressedChanged(void* context, const bool& pressed);
-    static void onActionMenuOpenChanged(void* context, const bool& open);
-    static void onActionMenuSelectedIndexChanged(void* context, const int& index);
-    static void onPendingDeleteChanged(void* context, const PendingDeleteFile& pending);
-    static void onPendingRenameChanged(void* context, const PendingRenameFile& pending);
-    static void onPendingRenameNameChanged(void* context, const std::string& name);
-    static void onPackageDialogChanged(void* context, const PackageDialog& dialog);
-    static void onPackageScroll(void* context, const int& offset);
-    static void onMagicChanged(void* context, const uint32_t& magicSerial);
 };
 
 }  // namespace files

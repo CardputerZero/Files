@@ -15,6 +15,8 @@ public:
 
     void generate(uint32_t magicSerial);
     void tick(uint32_t nowMs);
+    bool active() const;
+    void stop();
 
 private:
     struct Impl;

@@ -32,6 +32,13 @@ public:
         return _title;
     }
 
+    bool usesWideFooter() const override { return true; }
+
+    void setNoticeHeight(int height) override
+    {
+        if (_view) _view->setNoticeHeight(height);
+    }
+
     void attach(lv_obj_t* parent) override
     {
         _view_model = std::make_unique<AudioPreviewViewModel>(_model);
@@ -62,9 +69,6 @@ public:
     {
         if (_view_model) {
             _view_model->tick(nowMs);
-        }
-        if (_view) {
-            _view->tick(nowMs);
         }
     }
 

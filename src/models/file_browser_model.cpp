@@ -726,6 +726,27 @@ FileTransferResult FileBrowserModel::performTransfer(const FileEntry& entry, con
     return result;
 }
 
+FileOperationResult FileBrowserModel::createDirectory(const std::string& name)
+{
+    if (inPlaces()) return errorResult(FileOperationStatus::InvalidSelection, "Open a folder first");
+    if (name.empty() || name == "." || name == ".." || name.find('/') != std::string::npos ||
+        name.find('\0') != std::string::npos) {
+        return errorResult(FileOperationStatus::InvalidSelection, "Invalid name");
+    }
+    const internal::TransferDirectory directory(_current_directory.get(), _current_mount_id);
+    if (!directory.connected()) return disconnected();
+    std::error_code error;
+    if (!fs::create_directory(directory.path() / name, error)) {
+        if (!error || error == std::errc::file_exists) {
+            return errorResult(FileOperationStatus::Failed, "Name already exists");
+        }
+        return filesystemError("Create folder", error);
+    }
+    refreshSelecting(pathString(fs::path(_current_directory.get()) / name));
+    _status.set("Created " + name);
+    return {};
+}
+
 FileOperationResult FileBrowserModel::renameSelectedTo(const std::string& name)
 {
     const FileEntry* selected = selectedEntry();

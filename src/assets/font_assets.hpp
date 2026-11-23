@@ -5,6 +5,7 @@
 namespace files {
 
 void initFontAssets();
+const lv_font_t* uiKeyBitmapFont();
 const lv_font_t* uiFont10();
 const lv_font_t* uiFont12();
 const lv_font_t* uiFont14();

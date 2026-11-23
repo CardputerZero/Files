@@ -2,6 +2,8 @@
 
 #include "assets/assets.h"
 #include "assets/font_assets.hpp"
+#include "core/files_language.hpp"
+#include "views/ui_style.hpp"
 #include <algorithm>
 #if defined(__unix__) || defined(__APPLE__)
 #include <cerrno>
@@ -14,6 +16,7 @@
 #endif
 #endif
 #include <fstream>
+#include <optional>
 #include <lvgl/lvgl_cpp/label.hpp>
 #include <lvgl/lvgl_cpp/obj.hpp>
 #include <string_view>
@@ -24,25 +27,24 @@ namespace {
 
 constexpr int32_t kScreenWidth          = 320;
 constexpr int32_t kScreenHeight         = 170;
-constexpr int32_t kPathBarHeight        = 21;
-constexpr int32_t kTextPanelY           = 0;
-constexpr int32_t kTextPanelH           = kScreenHeight;
-constexpr int32_t kTextPaddingX         = 10;
-constexpr int32_t kTextPaddingY         = 8;
-constexpr int32_t kScrollStep           = 28;
-constexpr int32_t kPageScrollStep       = 128;
-constexpr int32_t kScrollbarX           = 314;
-constexpr int32_t kScrollbarY           = kTextPanelY + 7;
-constexpr int32_t kScrollbarW           = 2;
-constexpr int32_t kScrollbarH           = kTextPanelH - 14;
-constexpr int32_t kScrollbarMinH        = 18;
+constexpr int32_t kPathBarHeight        = 20;
+constexpr int32_t kTextPanelY           = kPathBarHeight;
+constexpr int32_t kTextPanelH           = 126;
+constexpr int32_t kTextPaddingX         = 8;
+constexpr int32_t kTextPaddingY         = 0;
+constexpr int32_t kScrollStep           = 18;
+constexpr int32_t kPageScrollStep       = 108;
+constexpr int32_t kScrollbarX           = 315;
+constexpr int32_t kScrollbarY           = kTextPanelY;
+constexpr int32_t kScrollbarW           = 3;
+constexpr int32_t kScrollbarH           = kTextPanelH;
+constexpr int32_t kScrollbarMinH        = 12;
 constexpr uint32_t kHoldRepeatDelayMs   = 320;
 constexpr uint32_t kHoldRepeatMs        = 90;
-constexpr uint32_t kPathBarColor        = 0x313131;
 constexpr uint32_t kTextColor           = 0xFFFFFF;
-constexpr uint32_t kMutedTextColor      = 0xA7A7A7;
-constexpr uint32_t kScrollbarTrackColor = 0x2B2B2B;
-constexpr uint32_t kScrollbarThumbColor = 0x848484;
+constexpr uint32_t kMutedTextColor      = ui::error;
+constexpr uint32_t kScrollbarTrackColor = ui::track;
+constexpr uint32_t kScrollbarThumbColor = ui::secondary;
 constexpr uint64_t kMaxPreviewBytes     = 64 * 1024;
 constexpr size_t kTextSniffBytes        = 4096;
 
@@ -119,7 +121,7 @@ bool readTextSample(const FileEntry& file, std::string& sample)
 #endif
 }
 
-std::string readTextContent(const FileEntry& file)
+std::optional<std::string> readTextContent(const FileEntry& file, int& error, bool& limited)
 {
 #if defined(__unix__) || defined(__APPLE__)
     // Open non-blocking and verify the node after opening as well.  The status
@@ -128,13 +130,16 @@ std::string readTextContent(const FileEntry& file)
     // preview creation.
     const int fd = ::open(file.path.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
     if (fd < 0) {
-        return "Read failed";
+        error = errno;
+        return std::nullopt;
     }
 
     struct stat stat_buffer {};
-    if (::fstat(fd, &stat_buffer) != 0 || !S_ISREG(stat_buffer.st_mode)) {
+    const int status = ::fstat(fd, &stat_buffer);
+    if (status != 0 || !S_ISREG(stat_buffer.st_mode)) {
+        error = status != 0 ? errno : EINVAL;
         ::close(fd);
-        return "Read failed";
+        return std::nullopt;
     }
 
     const uint64_t file_size = stat_buffer.st_size > 0 ? static_cast<uint64_t>(stat_buffer.st_size) : 0;
@@ -150,41 +155,69 @@ std::string readTextContent(const FileEntry& file)
         if (bytes_read < 0 && errno == EINTR) {
             continue;
         }
-        // Regular files should not return EAGAIN, but treating it as a short
-        // read keeps the preview bounded if a nonstandard filesystem does.
+        if (bytes_read < 0) {
+            error = errno;
+            ::close(fd);
+            return std::nullopt;
+        }
         break;
     }
     ::close(fd);
     content.resize(offset);
-    if (file_size > kMaxPreviewBytes) {
-        content += "\n\n...";
+    limited = file_size > kMaxPreviewBytes;
+    if (limited && !content.empty()) {
+        // The byte limit can land inside the final UTF-8 codepoint.
+        auto lead = content.size() - 1;
+        while (lead && (static_cast<unsigned char>(content[lead]) & 0xc0) == 0x80) --lead;
+        const auto ch = static_cast<unsigned char>(content[lead]);
+        const size_t bytes = ch < 0x80 ? 1 : ch < 0xe0 ? 2 : ch < 0xf0 ? 3 : 4;
+        if (content.size() - lead < bytes) content.resize(lead);
     }
     return content;
 #else
     std::ifstream stream(file.path, std::ios::binary);
     if (!stream) {
-        return "Read failed";
+        error = errno ? errno : EIO;
+        return std::nullopt;
     }
 
     const uint64_t limit = std::min(file.size, kMaxPreviewBytes);
     std::string content(static_cast<size_t>(limit), '\0');
     stream.read(content.data(), static_cast<std::streamsize>(content.size()));
-    content.resize(static_cast<size_t>(stream.gcount()));
-    if (file.size > kMaxPreviewBytes) {
-        content += "\n\n...";
+    if (stream.bad()) {
+        error = errno ? errno : EIO;
+        return std::nullopt;
     }
+    content.resize(static_cast<size_t>(stream.gcount()));
+    limited = file.size > kMaxPreviewBytes;
     return content;
 #endif
 }
 
 class TextPreviewPage : public PreviewPage {
 public:
-    TextPreviewPage(std::string title, std::string content) : _title(std::move(title)), _content(std::move(content))
+    TextPreviewPage(std::string title, std::string content) : _title(std::move(title)), _content(std::move(content)), _recolor(true)
     {
     }
 
-    explicit TextPreviewPage(const FileEntry& file) : TextPreviewPage(file.name, readTextContent(file))
+    explicit TextPreviewPage(const FileEntry& file) : _title(file.name)
     {
+        int error = 0;
+        auto content = readTextContent(file, error, _limited);
+        if (content) {
+            _content = std::move(*content);
+        } else {
+            _read_failed = true;
+            if (error == EACCES || error == EPERM) {
+                _read_reason = local("Read permission denied.", "Chybí oprávnění ke čtení.");
+            } else if (error == EIO) {
+                _read_reason = local("Input/output error.", "Chyba vstupu/výstupu.");
+            } else if (error == ENOENT) {
+                _read_reason = local("The file is no longer available.", "Soubor už není dostupný.");
+            } else {
+                _read_reason.clear();
+            }
+        }
     }
 
     const std::string& title() const override
@@ -196,7 +229,7 @@ public:
     {
         _root = std::make_unique<smooth_ui_toolkit::lvgl_cpp::Container>(parent);
         _root->setSize(kScreenWidth, kScreenHeight);
-        _root->setBgColor(lv_color_hex(0x191919));
+        _root->setBgColor(lv_color_hex(ui::black));
         _root->setBgOpa(LV_OPA_COVER);
         _root->setBorderWidth(0);
         _root->setPaddingAll(0);
@@ -204,7 +237,20 @@ public:
         _root->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
 
         createTextPanel();
-        createTitleBar();
+        auto* header = ui::caption(_root->raw_ptr(), 0, _title.empty() ? local("Preview", "Náhled") : _title, uiFont14());
+        lv_obj_set_y(lv_obj_get_child(header, 0), 0);
+        if (_limited) {
+            const auto* notice = local("First 64 KiB", "Prvních 64 KiB");
+            const int width = textWidth(notice, uiFont12());
+            auto* status = ui::label(header, 312 - width, 2, width, uiFont12(), ui::secondary);
+            lv_label_set_text(status, notice);
+            auto* title = lv_obj_get_child(header, 0);
+            lv_obj_set_width(title, 296 - width);
+            ui::line(title, _title, 296 - width, uiFont14(), std::string::npos, true);
+        }
+        const auto footer = ui::caption(_root->raw_ptr(), 150, "");
+        _keys = lv_obj_get_child(footer, 0);
+        lv_obj_set_width(_keys, 252);
         createScrollbar();
         refreshScrollbar();
     }
@@ -215,8 +261,8 @@ public:
         _scrollbar_track.reset();
         _label.reset();
         _panel.reset();
-        _title_label.reset();
-        _path_bar.reset();
+        _keys = nullptr;
+        _last_scroll_top = _last_scroll_bottom = -1;
         _root.reset();
     }
 
@@ -280,9 +326,12 @@ public:
 private:
     std::string _title;
     std::string _content;
+    bool _read_failed = false;
+    bool _limited = false;
+    std::string _read_reason;
     std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Container> _root;
-    std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Container> _path_bar;
-    std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Label> _title_label;
+    lv_obj_t* _keys = nullptr;
+    bool _recolor = false;
     std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Container> _panel;
     std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Label> _label;
     std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Container> _scrollbar_track;
@@ -291,34 +340,6 @@ private:
     int32_t _last_scroll_bottom = -1;
     int _held_scroll_direction  = 0;
     uint32_t _next_scroll_at_ms = 0;
-
-    void createTitleBar()
-    {
-        _path_bar = std::make_unique<smooth_ui_toolkit::lvgl_cpp::Container>(_panel->raw_ptr());
-        _path_bar->setSize(kScreenWidth - kTextPaddingX * 2 - 8, kPathBarHeight);
-        _path_bar->setPos(0, 0);
-        _path_bar->setBgColor(lv_color_hex(kPathBarColor));
-        _path_bar->setBgOpa(LV_OPA_COVER);
-        _path_bar->setBorderWidth(0);
-        _path_bar->setRadius(3);
-        _path_bar->setPaddingAll(0);
-        _path_bar->setScrollbarMode(LV_SCROLLBAR_MODE_OFF);
-        _path_bar->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
-
-        _title_label = std::make_unique<smooth_ui_toolkit::lvgl_cpp::Label>(_path_bar->raw_ptr());
-        _title_label->setText(_title.empty() ? "Preview" : _title.c_str());
-        _title_label->setTextFont(uiFont10());
-        _title_label->setTextColor(lv_color_hex(kTextColor));
-        _title_label->setLongMode(LV_LABEL_LONG_MODE_WRAP);
-        _title_label->setSize(kScreenWidth - kTextPaddingX * 2 - 8, LV_SIZE_CONTENT);
-        lv_obj_set_style_text_align(_title_label->raw_ptr(), LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
-        lv_obj_update_layout(_title_label->raw_ptr());
-        const int32_t titleHeight = lv_obj_get_height(_title_label->raw_ptr());
-        const int32_t barHeight = std::max<int32_t>(kPathBarHeight, titleHeight);
-        _path_bar->setHeight(barHeight);
-        _title_label->setPos(0, (barHeight - titleHeight) / 2);
-        _label->setY(barHeight + 8);
-    }
 
     void createTextPanel()
     {
@@ -331,13 +352,34 @@ private:
         _panel->setScrollbarMode(LV_SCROLLBAR_MODE_OFF);
         _panel->setScrollDir(LV_DIR_VER);
 
+        if (!_read_failed && _content.empty()) {
+            auto* empty = ui::label(_panel->raw_ptr(), 0, 56, 304, uiFont14(), ui::secondary);
+            lv_obj_set_style_text_align(empty, LV_TEXT_ALIGN_CENTER, 0);
+            lv_label_set_text(empty, local("Empty file", "Prázdný soubor"));
+            return;
+        }
         _label = std::make_unique<smooth_ui_toolkit::lvgl_cpp::Label>(_panel->raw_ptr());
-        _label->setText(_content.empty() ? "" : _content.c_str());
-        _label->setTextFont(textPreviewFont());
-        _label->setTextColor(lv_color_hex(_content == "Read failed" ? kMutedTextColor : kTextColor));
+        const auto display = !_content.empty() && _content.front() == '/' &&
+            _content.find_first_of(" \t\r\n") == std::string::npos
+            ? wrapPath(_content, 296, uiFont14()) : _content;
+        _label->setText(_read_failed ?
+            (_read_reason.empty() ? local("The file could not be read", "Soubor se nepodařilo přečíst") :
+                                   local("Read failed", "Čtení se nezdařilo")) : display.c_str());
+        lv_label_set_recolor(_label->raw_ptr(), _recolor);
+        _label->setTextFont(uiFont14());
+        lv_obj_set_style_text_line_space(_label->raw_ptr(), kScrollStep - lv_font_get_line_height(uiFont14()), 0);
+        _label->setTextColor(lv_color_hex(_read_failed ? kMutedTextColor : kTextColor));
         _label->setLongMode(LV_LABEL_LONG_MODE_WRAP);
         _label->setSize(kScreenWidth - kTextPaddingX * 2 - 8, LV_SIZE_CONTENT);
-        _label->setPos(0, kPathBarHeight + 8);
+        _label->setPos(0, 0);
+        if (_read_failed) {
+            _label->setPos(14, 2);
+            _label->setSize(282, LV_SIZE_CONTENT);
+            ui::errorCross(_panel->raw_ptr(), 0, 6);
+            if (_read_reason.empty()) return;
+            auto* reason = ui::label(_panel->raw_ptr(), 0, kScrollStep + 3, 296, uiFont14());
+            lv_label_set_text(reason, _read_reason.c_str());
+        }
     }
 
     void createScrollbar()
@@ -346,9 +388,11 @@ private:
         _scrollbar_track->setSize(kScrollbarW, kScrollbarH);
         _scrollbar_track->setPos(kScrollbarX, kScrollbarY);
         _scrollbar_track->setBgColor(lv_color_hex(kScrollbarTrackColor));
+        ui::box(_scrollbar_track->raw_ptr(), 0, 0, 3, 1, ui::secondary);
+        ui::box(_scrollbar_track->raw_ptr(), 0, kScrollbarH - 1, 3, 1, ui::secondary);
         _scrollbar_track->setBgOpa(LV_OPA_COVER);
         _scrollbar_track->setBorderWidth(0);
-        _scrollbar_track->setRadius(kScrollbarW);
+        _scrollbar_track->setRadius(0);
         _scrollbar_track->setPaddingAll(0);
         _scrollbar_track->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
 
@@ -358,7 +402,7 @@ private:
         _scrollbar_thumb->setBgColor(lv_color_hex(kScrollbarThumbColor));
         _scrollbar_thumb->setBgOpa(LV_OPA_COVER);
         _scrollbar_thumb->setBorderWidth(0);
-        _scrollbar_thumb->setRadius(kScrollbarW);
+        _scrollbar_thumb->setRadius(0);
         _scrollbar_thumb->setPaddingAll(0);
         _scrollbar_thumb->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
     }
@@ -378,6 +422,9 @@ private:
         _last_scroll_bottom = bottom;
 
         const int32_t range = top + bottom;
+        const auto* movement = top > 0 ? (bottom > 0 ? "F↑ X↓" : "F↑") : (bottom > 0 ? "X↓" : "");
+        const auto hint = keyHints({movement, local("Esc Back", "Esc Zpět")}, {});
+        ui::keyLegend(_keys, hint);
         if (range <= 0) {
             _scrollbar_track->setOpa(LV_OPA_TRANSP);
             _scrollbar_thumb->setOpa(LV_OPA_TRANSP);
@@ -398,7 +445,7 @@ private:
 
     void scroll(int direction)
     {
-        scroll(direction, LV_ANIM_ON);
+        scroll(direction, LV_ANIM_OFF);
     }
 
     void scroll(int direction, lv_anim_enable_t anim)

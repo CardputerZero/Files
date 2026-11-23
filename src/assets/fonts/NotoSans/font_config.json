@@ -1,6 +1,14 @@
 {
     "targets": [
         {
+            "name": "font_noto_sans_clock_16",
+            "source": "NotoSans-SemiBold.ttf",
+            "args": ["--no-compress", "--no-prefilter", "--no-kerning"],
+            "size": 16,
+            "bpp": 4,
+            "symbols": ["0123456789:-"]
+        },
+        {
             "name": "font_noto_sans_semibold_12",
             "source": "NotoSans-SemiBold.ttf",
             "args": [

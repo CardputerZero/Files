@@ -56,6 +56,7 @@ with tempfile.TemporaryDirectory() as folder:
             key("Tab")
             for _ in range(4):
                 key("Down")
+            key("Return")
             key("Return", delay=.08)
             deadline = time.monotonic() + 1
             while not output.exists() and time.monotonic() < deadline:

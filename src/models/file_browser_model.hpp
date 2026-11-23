@@ -84,6 +84,7 @@ public:
     FileOperationResult copyEntryTo(const FileEntry& entry, const std::string& destinationDirectory);
     FileOperationResult copySelectedTo(const std::string& destinationDirectory);
     FileOperationResult moveEntryTo(const FileEntry& entry, const std::string& destinationDirectory);
+    FileOperationResult createDirectory(const std::string& name);
     FileOperationResult renameSelectedTo(const std::string& name);
     FileOperationResult deleteSelected();
 

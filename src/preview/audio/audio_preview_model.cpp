@@ -5,6 +5,7 @@
 #include <miniaudio.h>
 #include <spdlog/spdlog.h>
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <cstring>
@@ -364,33 +365,27 @@ private:
             return;
         }
 
-        const uint32_t step              = std::max<uint32_t>(1, self->speed_step.load());
-        float frame[kPlaybackChannels]   = {};
-        float discard[kPlaybackChannels] = {};
-
-        for (ma_uint32 i = 0; i < frame_count; ++i) {
-            ma_uint64 frames_read = 0;
-            ma_decoder_read_pcm_frames(&self->decoder, frame, 1, &frames_read);
-            if (frames_read == 0) {
+        const auto step = self->speed_step.load();
+        constexpr ma_uint32 batchFrames = 256;
+        std::array<float, batchFrames * 5 * kPlaybackChannels> decoded;
+        for (ma_uint32 offset = 0; offset < frame_count;) {
+            const auto batch = std::min(batchFrames, frame_count - offset);
+            const auto needed = batch * step;
+            ma_uint64 received = 0;
+            ma_decoder_read_pcm_frames(&self->decoder, decoded.data(), needed, &received);
+            const auto samples = static_cast<ma_uint32>((received + step - 1) / step);
+            for (ma_uint32 i = 0; i < samples; ++i) {
+                for (ma_uint32 channel = 0; channel < kPlaybackChannels; ++channel) {
+                    out[(offset + i) * kPlaybackChannels + channel] = audio_playback_gain::apply(
+                        decoded[i * step * kPlaybackChannels + channel], self->normalization_gain);
+                }
+            }
+            if (received < needed) {
                 self->playing.store(false);
                 self->finished.store(true);
                 break;
             }
-
-            for (ma_uint32 channel = 0; channel < kPlaybackChannels; ++channel) {
-                out[static_cast<size_t>(i) * kPlaybackChannels + channel] =
-                    audio_playback_gain::apply(frame[channel], self->normalization_gain);
-            }
-
-            for (uint32_t skip = 1; skip < step; ++skip) {
-                ma_uint64 discarded = 0;
-                ma_decoder_read_pcm_frames(&self->decoder, discard, 1, &discarded);
-                if (discarded == 0) {
-                    self->playing.store(false);
-                    self->finished.store(true);
-                    return;
-                }
-            }
+            offset += batch;
         }
     }
 };
@@ -409,18 +404,20 @@ bool AudioPreviewModel::load(const FileEntry& file)
 
     if (!_impl->load(file)) {
         _file.set(AudioPreviewFile{file, 0});
+        _state.set(AudioPlaybackState::Error);
         return false;
     }
 
-    const auto duration = static_cast<uint32_t>(std::ceil(std::max(0.0f, _impl->durationSec())));
+    const auto duration = std::max(0.0f, _impl->durationSec());
     _file.set(AudioPreviewFile{file, duration});
-    _state.set(AudioPlaybackState::Paused);
+    _state.set(AudioPlaybackState::Ready);
     _progress_sec.set(_impl->progressSec());
     return true;
 }
 
 void AudioPreviewModel::togglePlayPause()
 {
+    if (_state.get() == AudioPlaybackState::Error) return;
     if (_state.get() == AudioPlaybackState::Playing) {
         pause();
         return;
@@ -428,6 +425,8 @@ void AudioPreviewModel::togglePlayPause()
 
     if (_impl->play()) {
         _state.set(AudioPlaybackState::Playing);
+    } else {
+        _state.set(AudioPlaybackState::Error);
     }
 }
 
@@ -444,7 +443,7 @@ void AudioPreviewModel::pause()
 
 void AudioPreviewModel::seek(float offsetSec)
 {
-    if (_state.get() == AudioPlaybackState::Stopped && _file.get().entry.path.empty()) {
+    if (_state.get() == AudioPlaybackState::Error || _file.get().entry.path.empty()) {
         return;
     }
 
@@ -459,6 +458,7 @@ void AudioPreviewModel::seek(float offsetSec)
 
 void AudioPreviewModel::toggleSpeed()
 {
+    if (_state.get() == AudioPlaybackState::Error) return;
     float current = _speed.get();
     float next    = 1.0f;
     if (current < 2.0f) {
@@ -482,7 +482,7 @@ void AudioPreviewModel::tick(uint32_t nowMs)
 
     if (_impl->consumeFinished()) {
         _state.set(AudioPlaybackState::Stopped);
-        _progress_sec.set(static_cast<float>(_file.get().durationSec));
+        _progress_sec.set(_file.get().durationSec);
         spdlog::info("AudioPreviewModel: finished");
     }
 }

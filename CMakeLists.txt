@@ -264,13 +264,24 @@ if(BUILD_TESTING)
     add_test(NAME file_browser_model COMMAND file_browser_model_tests)
 
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-        get_target_property(STORAGE_TEST_SOURCES file_browser_model_tests SOURCES)
-        list(REMOVE_ITEM STORAGE_TEST_SOURCES tests/file_browser_model_test.cpp)
-        list(APPEND STORAGE_TEST_SOURCES src/models/debian_package.cpp src/models/debian_install.cpp)
-        add_executable(storage_package_tests tests/storage_package_test.cpp ${STORAGE_TEST_SOURCES})
+        add_executable(storage_package_tests
+            tests/storage_package_test.cpp
+            src/core/files_config.cpp
+            src/core/files_types.cpp
+            src/models/file_browser_model.cpp
+            src/models/file_type_registry.cpp
+            src/models/filesystem_transfer.cpp
+            src/models/mount_info.cpp
+            src/models/removable_volumes.cpp
+            src/models/debian_package.cpp
+            src/models/debian_install.cpp
+            src/models/command.cpp
+        )
         target_include_directories(storage_package_tests PRIVATE "${FILES_SRC_DIR}")
         target_link_libraries(storage_package_tests PRIVATE smooth_ui_toolkit spdlog::spdlog Threads::Threads)
         add_test(NAME storage_package COMMAND storage_package_tests)
+        get_target_property(STORAGE_TEST_SOURCES storage_package_tests SOURCES)
+        list(REMOVE_ITEM STORAGE_TEST_SOURCES tests/storage_package_test.cpp)
         add_executable(files_hardening_probe tests/hardening_probe.cpp ${STORAGE_TEST_SOURCES})
         target_include_directories(files_hardening_probe PRIVATE "${FILES_SRC_DIR}")
         target_link_libraries(files_hardening_probe PRIVATE smooth_ui_toolkit spdlog::spdlog Threads::Threads)
@@ -320,6 +331,8 @@ if(BUILD_TESTING)
 
     add_executable(font_coverage_tests
         tests/font_coverage_test.cpp
+        src/views/browser_text.cpp
+        src/core/files_language.cpp
         src/assets/font_assets.cpp
         src/assets/res_c/font_noto_sans_semibold_12.c
         src/assets/res_c/font_noto_sans_semibold_14.c

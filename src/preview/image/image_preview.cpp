@@ -2,6 +2,8 @@
 
 #include "assets/assets.h"
 #include "assets/font_assets.hpp"
+#include "core/files_language.hpp"
+#include "views/ui_style.hpp"
 #include "preview/common/bottom_key_bar.hpp"
 #include "preview/image/bmp_decoder.hpp"
 #include "preview/image/jpeg_decoder.hpp"
@@ -20,16 +22,14 @@ namespace {
 
 constexpr int32_t kScreenWidth                 = 320;
 constexpr int32_t kScreenHeight                = 170;
-constexpr int32_t kTitleWidth                  = 230;
-constexpr int32_t kTitleY                      = -5;
-constexpr int32_t kPreviewX                    = 20;
-constexpr int32_t kPreviewY                    = 18;
-constexpr int32_t kPreviewWidth                = 280;
-constexpr int32_t kPreviewHeight               = 110;
-constexpr int32_t kFullscreenX                 = 0;
-constexpr int32_t kFullscreenY                 = 0;
-constexpr int32_t kFullscreenWidth             = kScreenWidth;
-constexpr int32_t kFullscreenHeight            = kScreenHeight;
+constexpr int32_t kPreviewX                    = 8;
+constexpr int32_t kPreviewY                    = 20;
+constexpr int32_t kPreviewWidth                = 304;
+constexpr int32_t kPreviewHeight               = 130;
+constexpr int32_t kFullscreenX                 = 2;
+constexpr int32_t kFullscreenY                 = 2;
+constexpr int32_t kFullscreenWidth             = kScreenWidth - 4;
+constexpr int32_t kFullscreenHeight            = kScreenHeight - 4;
 constexpr int32_t kMoveStep                    = 16;
 // LVGL image scales are expressed as 1/256.  The preview viewport is only
 // 280x110, so camera photos can legitimately need a scale below 12.5% to fit
@@ -72,17 +72,7 @@ std::string lvglPath(const std::string& path)
 
 std::string fileTitle(const FileEntry& file)
 {
-    std::string name      = file.name.empty() ? file.path : file.name;
-    const std::string ext = file.extension;
-    if (!ext.empty() && name.size() > ext.size()) {
-        std::string tail = name.substr(name.size() - ext.size());
-        std::transform(tail.begin(), tail.end(), tail.begin(),
-                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-        if (tail == ext) {
-            name.resize(name.size() - ext.size());
-        }
-    }
-    return name;
+    return file.name.empty() ? file.path : file.name;
 }
 
 uint32_t fitScale(uint32_t imageWidth, uint32_t imageHeight, uint32_t boundsWidth, uint32_t boundsHeight)
@@ -135,6 +125,8 @@ public:
         }
     }
 
+    bool usesWideFooter() const override { return _preview_loaded && !_fullscreen; }
+
     const std::string& title() const override
     {
         return _title;
@@ -153,14 +145,10 @@ public:
         _root->setScrollbarMode(LV_SCROLLBAR_MODE_OFF);
         _root->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
 
-        _title_label = std::make_unique<smooth_ui_toolkit::lvgl_cpp::Label>(_root->raw_ptr());
-        _title_label->setText(_title.c_str());
-        _title_label->setTextFont(uiFont14());
-        _title_label->setTextColor(lv_color_hex(0x777777));
-        _title_label->setTextAlign(LV_TEXT_ALIGN_CENTER);
-        _title_label->setLongMode(LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
-        _title_label->setSize(kTitleWidth, LV_SIZE_CONTENT);
-        _title_label->align(LV_ALIGN_TOP_MID, 0, kTitleY);
+        _title_bar = ui::caption(_root->raw_ptr(), 0, _title, uiFont14());
+        _zoom_label = ui::label(_title_bar, 250, 2, 62, uiFont12(), ui::secondary);
+        lv_obj_set_style_text_align(_zoom_label, LV_TEXT_ALIGN_RIGHT, 0);
+        ui::hidden(_zoom_label, true);
 
         _viewport = std::make_unique<smooth_ui_toolkit::lvgl_cpp::Container>(_root->raw_ptr());
         _viewport->setBgColor(lv_color_hex(0x000000));
@@ -195,23 +183,29 @@ public:
         }
 
         _error_label = std::make_unique<smooth_ui_toolkit::lvgl_cpp::Label>(_viewport->raw_ptr());
-        _error_label->setText("No preview");
+        _error_label->setText(local("Cannot read image", "Obrázek nelze přečíst"));
         _error_label->setTextFont(uiFont14());
-        _error_label->setTextColor(lv_color_hex(0x777777));
+        _error_label->setTextColor(lv_color_hex(ui::error));
         _error_label->setTextAlign(LV_TEXT_ALIGN_CENTER);
         _error_label->setSize(lv_pct(100), LV_SIZE_CONTENT);
-        _error_label->align(LV_ALIGN_CENTER, 0, 0);
         if (_preview_loaded) {
             _error_label->addFlag(LV_OBJ_FLAG_HIDDEN);
+        } else {
+            const auto* message = local("Cannot read image", "Obrázek nelze přečíst");
+            const int width = textWidth(message, uiFont14());
+            const int start = (kPreviewWidth - width - 14) / 2;
+            ui::errorCross(_viewport->raw_ptr(), start, (kPreviewHeight - 10) / 2);
+            _error_label->setTextAlign(LV_TEXT_ALIGN_LEFT);
+            _error_label->setSize(width + 1, LV_SIZE_CONTENT);
+            _error_label->setPos(start + 14, (kPreviewHeight - lv_font_get_line_height(uiFont14())) / 2);
         }
 
         _key_bar = std::make_unique<BottomKeyBar>(_root->raw_ptr());
-        _key_bar->setItems({
-            {'4', &image_icon_fullscreen},
-            {'5', &image_icon_zoom_out},
-            {'7', &image_icon_zoom_in},
-            {'8', &image_icon_reset},
-        });
+        if (_preview_loaded) {
+            showWindowedKeys();
+        } else {
+            _key_bar->setItems({});
+        }
 
         fitForCurrentMode();
     }
@@ -223,12 +217,13 @@ public:
         _image.reset();
         _gif = nullptr;
         _viewport.reset();
-        _title_label.reset();
+        _title_bar = nullptr;
         _root.reset();
     }
 
     void onKey(uint32_t key, FilesRouter& router) override
     {
+        if (!_preview_loaded && key != '\x1b' && key != files_key::Left) return;
         switch (key) {
             case '\x1b':
             case files_key::Left:
@@ -248,8 +243,7 @@ public:
                 move(0, kMoveStep);
                 break;
             case '4':
-                _fullscreen = !_fullscreen;
-                fitForCurrentMode();
+                toggleFullscreen();
                 break;
             case '5':
                 zoom(false);
@@ -268,9 +262,6 @@ public:
     void tick(uint32_t nowMs) override
     {
         (void)nowMs;
-        if (_key_bar) {
-            _key_bar->tick();
-        }
     }
 
 private:
@@ -280,7 +271,9 @@ private:
     DrawBufferPtr _jpeg_buffer;
     DrawBufferPtr _bmp_buffer;
     std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Container> _root;
-    std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Label> _title_label;
+    lv_obj_t* _title_bar = nullptr;
+    lv_obj_t* _zoom_label = nullptr;
+    uint32_t _fit_scale = LV_SCALE_NONE;
     std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Container> _viewport;
     std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Image> _image;
     lv_obj_t* _gif = nullptr;
@@ -293,6 +286,10 @@ private:
     int32_t _view_x        = 0;
     int32_t _view_y        = 0;
     bool _fullscreen       = false;
+    struct ImageTransform { uint32_t scale; int32_t x; int32_t y; };
+    ImageTransform _windowed_transform{};
+    ImageTransform _fullscreen_start{};
+    int32_t _fullscreen_rotation = 0;
     bool _is_gif           = false;
     bool _is_jpeg          = false;
     bool _is_bmp           = false;
@@ -317,9 +314,34 @@ private:
                         static_cast<uint32_t>(viewportHeight()));
     }
 
+    void toggleFullscreen()
+    {
+        const ImageTransform before{_scale, _view_x, _view_y};
+        const auto previousFit = _fit_scale;
+        _fullscreen = !_fullscreen;
+        _fit_scale = defaultScale();
+        _scale = std::clamp((_scale * _fit_scale + previousFit / 2) / previousFit, kMinScale, kMaxScale);
+        if (_fullscreen) {
+            _windowed_transform = before;
+        } else if (before.scale == _fullscreen_start.scale && before.x == _fullscreen_start.x &&
+                   before.y == _fullscreen_start.y && _rotation == _fullscreen_rotation) {
+            _scale = _windowed_transform.scale;
+            _view_x = _windowed_transform.x;
+            _view_y = _windowed_transform.y;
+        }
+        refreshZoom();
+        applyLayout();
+        if (_fullscreen) {
+            _fullscreen_start = {_scale, _view_x, _view_y};
+            _fullscreen_rotation = _rotation;
+        }
+    }
+
     void fitForCurrentMode()
     {
-        _scale  = defaultScale();
+        _fit_scale = defaultScale();
+        _scale = _fit_scale;
+        refreshZoom();
         _view_x = 0;
         _view_y = 0;
         applyLayout();
@@ -348,7 +370,24 @@ private:
         // Keep both keys effective when rounding would leave the scale unchanged.
         next   = zoomIn ? std::max(next, _scale + 1) : std::min(next, _scale - 1);
         _scale = std::clamp(next, kMinScale, kMaxScale);
+        refreshZoom();
         applyImageTransform();
+    }
+
+    void refreshZoom()
+    {
+        const bool zoomed = _scale != _fit_scale;
+        const auto* fit = local("Fit", "Přizpůsobit");
+        const int zoomWidth = std::max(62, textWidth(fit, uiFont12()) + 2);
+        lv_obj_set_x(_zoom_label, 312 - zoomWidth);
+        lv_obj_set_width(_zoom_label, zoomWidth);
+        const int titleWidth = _preview_loaded ? 296 - zoomWidth : 304;
+        auto* title = lv_obj_get_child(_title_bar, 0);
+        lv_obj_set_width(title, titleWidth);
+        ui::line(title, _title, titleWidth, uiFont14(), std::string::npos, true);
+        lv_label_set_text_fmt(_zoom_label, local("%u%%", "%u %%"), (_scale * 100 + _fit_scale / 2) / _fit_scale);
+        if (!zoomed) lv_label_set_text(_zoom_label, fit);
+        ui::hidden(_zoom_label, !_preview_loaded);
     }
 
     void applyLayout()
@@ -362,34 +401,35 @@ private:
             _viewport->setSize(kFullscreenWidth, kFullscreenHeight);
             _viewport->setRadius(0);
             lv_obj_set_style_clip_corner(_viewport->raw_ptr(), false, LV_PART_MAIN);
-            if (_title_label) {
-                _title_label->addFlag(LV_OBJ_FLAG_HIDDEN);
-            }
+            ui::hidden(_title_bar, true);
             if (_key_bar) {
-                _key_bar->setItems({});
+                _key_bar->show(false);
             }
         } else {
             _viewport->setPos(kPreviewX, kPreviewY);
             _viewport->setSize(kPreviewWidth, kPreviewHeight);
-            lv_obj_remove_local_style_prop(_viewport->raw_ptr(), LV_STYLE_RADIUS, LV_PART_MAIN);
-            lv_obj_set_style_clip_corner(_viewport->raw_ptr(), true, LV_PART_MAIN);
-            if (_title_label) {
-                _title_label->removeFlag(LV_OBJ_FLAG_HIDDEN);
+            _viewport->setRadius(0);
+            lv_obj_set_style_clip_corner(_viewport->raw_ptr(), false, LV_PART_MAIN);
+            ui::hidden(_title_bar, false);
+            if (_key_bar && _preview_loaded) {
+                showWindowedKeys();
             }
-            if (_key_bar) {
-                _key_bar->setItems({
-                    {'4', &image_icon_fullscreen},
-                    {'5', &image_icon_zoom_out},
-                    {'7', &image_icon_zoom_in},
-                    {'8', &image_icon_reset},
-                });
-            }
-        }
-        if (_error_label) {
-            _error_label->setSize(viewportWidth(), LV_SIZE_CONTENT);
-            _error_label->align(LV_ALIGN_CENTER, 0, 0);
         }
         applyImageTransform();
+    }
+
+    void showWindowedKeys()
+    {
+        const auto* fullscreen = local("4 Full screen", "4 Celá obrazovka");
+        const int zoomOut = 8 + textWidth(fullscreen, uiFont12()) + 10;
+        const int zoomIn = zoomOut + textWidth("5 −", uiFont12()) + 10;
+        const int rotate = zoomIn + textWidth("7 +", uiFont12()) + 10;
+        const auto* rotation = local("8 Rotate", "8 Otočit");
+        const int back = rotate + textWidth(rotation, uiFont12()) + 10;
+        const auto* backAction = local("Esc Back", "Esc Zpět");
+        _key_bar->setSlots({{8, zoomOut - 8, fullscreen}, {zoomOut, zoomIn - zoomOut, "5 −"},
+                            {zoomIn, rotate - zoomIn, "7 +"}, {rotate, back - rotate, rotation},
+                            {back, textWidth(backAction, uiFont12()) + 1, backAction}});
     }
 
     void applyImageTransform()
