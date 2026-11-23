@@ -149,6 +149,10 @@ def font_targets(fonts_dir: Path) -> list[dict]:
             target["config"] = config_path
             target["source_path"] = source
             target["symbol"] = symbol
+            target["additional_fonts"] = [
+                ((config_path.parent / font["source"]).resolve(), font["ranges"])
+                for font in item.get("additional_fonts", [])
+            ]
             targets.append(target)
 
     return targets
@@ -168,10 +172,10 @@ def replace_if_changed(source: Path, target: Path) -> bool:
 
 
 def prepend_marker(path: Path) -> None:
-    content = path.read_text()
-    if content.startswith(FONT_MARKER):
-        return
-    path.write_text(f"{FONT_MARKER}\n{content}")
+    content = path.read_text().rstrip() + "\n"
+    if not content.startswith(FONT_MARKER):
+        content = f"{FONT_MARKER}\n{content}"
+    path.write_text(content)
 
 
 def lv_font_conv_args(target: dict, out_c: Path) -> list[str]:
@@ -195,6 +199,13 @@ def lv_font_conv_args(target: dict, out_c: Path) -> list[str]:
     if symbols:
         args.extend(["--symbols", symbols])
 
+    # lv_font_conv assigns overlapping codepoints to the last source.
+    # Additional fonts should declare only the glyphs they supply.
+    for path, ranges in target["additional_fonts"]:
+        args.extend(["--font", str(path)])
+        for font_range in normalize_list(ranges):
+            args.extend(["-r", font_range])
+
     args.extend([
         "--format", "lvgl",
         "-o", str(out_c),
@@ -210,11 +221,13 @@ def convert_font(font_conv: str, target: dict, tmp_dir: Path) -> tuple[Path, boo
 
     subprocess.run(cmd, check=True)
     replace_text(tmp_c, str(tmp_c), convert_images.display_path(out_c))
-    replace_text(
-        tmp_c,
-        str(target["source_path"]),
-        convert_images.display_path(target["source_path"], ASSETS_DIR),
-    )
+    sources = [target["source_path"], *(path for path, _ in target["additional_fonts"])]
+    repo_root = convert_images.repo_root()
+    for source in sources:
+        display_path = source.as_posix()
+        if source.is_relative_to(repo_root):
+            display_path = Path(os.path.relpath(source, ASSETS_DIR)).as_posix()
+        replace_text(tmp_c, str(source), display_path)
     prepend_marker(tmp_c)
     changed = replace_if_changed(tmp_c, out_c)
     return out_c, changed

@@ -38,6 +38,7 @@ public:
     bool onLvglKeyState(uint32_t lv_key, const char* utf8, bool pressed);
     void tick(uint32_t nowMs);
     bool hostRenderingSuspended() const;
+    bool sensitiveInputActive() const { return _browser_vm.packagePasswordActive(); }
 
     bool quitRequested() const
     {
@@ -54,6 +55,8 @@ private:
     PreviewView _preview_view;
     std::unique_ptr<PreviewPage> _help_page;
     lv_obj_t* _exit_hint      = nullptr;
+    lv_obj_t* _volume_notice  = nullptr;
+    lv_obj_t* _preview_usb_hint = nullptr;
     ViewModel* _current_vm    = nullptr;
     View* _current_view       = nullptr;
     lv_group_t* _input_group  = nullptr;
@@ -89,6 +92,9 @@ private:
     void showHelpPage();
     void closeHelpPage();
     void createExitHint();
+    void createVolumeNotice();
+    void updateVolumeNoticeVisibility();
+    static void onVolumeNoticeChanged(void* context, const VolumeNotice& notice);
     void showExitHint();
     void hideExitHint();
     void releaseEscPress();

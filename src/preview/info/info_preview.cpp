@@ -2,6 +2,7 @@
 
 #include "assets/assets.h"
 #include "assets/font_assets.hpp"
+#include <algorithm>
 #include <ctime>
 #include <iomanip>
 #include <lvgl/lvgl_cpp/image.hpp>
@@ -94,7 +95,8 @@ public:
         _root->setBgOpa(LV_OPA_COVER);
         _root->setBorderWidth(0);
         _root->setPaddingAll(0);
-        _root->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
+        _root->setScrollDir(LV_DIR_VER);
+        _root->setScrollbarMode(LV_SCROLLBAR_MODE_AUTO);
 
         _file_icon = std::make_unique<smooth_ui_toolkit::lvgl_cpp::Image>(_root->raw_ptr());
         _file_icon->setSize(20, 20);
@@ -104,10 +106,12 @@ public:
         _title_label = std::make_unique<smooth_ui_toolkit::lvgl_cpp::Label>(_root->raw_ptr());
         _title_label->setTextFont(uiFont14());
         _title_label->setTextColor(lv_color_hex(0xFFFFFF));
-        _title_label->setLongMode(LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
-        _title_label->setSize(272, LV_SIZE_CONTENT);
+        _title_label->setLongMode(LV_LABEL_LONG_MODE_WRAP);
+        _title_label->setSize(264, LV_SIZE_CONTENT);
         _title_label->setPos(38, 8);
         _title_label->setText(_title.c_str());
+        lv_obj_update_layout(_title_label->raw_ptr());
+        const int fieldY = std::max<int>(44, 12 + lv_obj_get_height(_title_label->raw_ptr()));
 
         _field_labels.reserve(5);
         for (int i = 0; i < 5; ++i) {
@@ -116,7 +120,7 @@ public:
             label->setTextColor(lv_color_hex(0xA7A7A7));
             label->setLongMode(LV_LABEL_LONG_DOT);
             label->setSize(300, LV_SIZE_CONTENT);
-            label->setPos(10, 44 + i * 20);
+            label->setPos(10, fieldY + i * 20);
             _field_labels.push_back(std::move(label));
         }
 
@@ -125,14 +129,14 @@ public:
         _path_title_label->setTextFont(uiMonoFont12());
         _path_title_label->setTextColor(lv_color_hex(0xA7A7A7));
         _path_title_label->setSize(40, LV_SIZE_CONTENT);
-        _path_title_label->setPos(10, 44 + 5 * 20);
+        _path_title_label->setPos(10, fieldY + 5 * 20);
 
         _path_value_label = std::make_unique<smooth_ui_toolkit::lvgl_cpp::Label>(_root->raw_ptr());
         _path_value_label->setTextFont(uiMonoFont12());
         _path_value_label->setTextColor(lv_color_hex(0xA7A7A7));
         _path_value_label->setLongMode(LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
         _path_value_label->setSize(254, LV_SIZE_CONTENT);
-        _path_value_label->setPos(56, 44 + 5 * 20);
+        _path_value_label->setPos(56, fieldY + 5 * 20);
 
         renderFile();
     }
@@ -153,6 +157,18 @@ public:
             case files_key::Left:
             case '\x1b':
                 router.back();
+                break;
+            case files_key::Up:
+                _root->scrollByBounded(0, 20, LV_ANIM_OFF);
+                break;
+            case files_key::Down:
+                _root->scrollByBounded(0, -20, LV_ANIM_OFF);
+                break;
+            case files_key::PageUp:
+                _root->scrollByBounded(0, 120, LV_ANIM_OFF);
+                break;
+            case files_key::PageDown:
+                _root->scrollByBounded(0, -120, LV_ANIM_OFF);
                 break;
             default:
                 break;

@@ -229,6 +229,11 @@ void FilesKeypad::setKeyCallback(KeyCallback callback)
     _key_callback = std::move(callback);
 }
 
+void FilesKeypad::setSensitiveInputCheck(std::function<bool()> check)
+{
+    _sensitive_input_check = std::move(check);
+}
+
 void FilesKeypad::readCb(lv_indev_t* indev, lv_indev_data_t* data)
 {
     auto* keypad = static_cast<FilesKeypad*>(lv_indev_get_user_data(indev));
@@ -270,9 +275,12 @@ bool FilesKeypad::ensureIndev()
 
 void FilesKeypad::pushKeyEvent(uint16_t code, int32_t value)
 {
+#if !LV_USE_SDL && defined(__linux__)
+    const bool debug = inputDebugEnabled() && (!_sensitive_input_check || !_sensitive_input_check());
+#endif
     if (value != 0 && value != 1) {
 #if !LV_USE_SDL && defined(__linux__)
-        if (inputDebugEnabled()) {
+        if (debug) {
             spdlog::info("FilesKeypad: ignored repeat key code={}, value={}", code, value);
         }
 #endif
@@ -293,7 +301,7 @@ void FilesKeypad::pushKeyEvent(uint16_t code, int32_t value)
     const uint32_t key = translateKey(code);
     if (key == 0) {
 #if !LV_USE_SDL && defined(__linux__)
-        if (inputDebugEnabled()) {
+        if (debug) {
             spdlog::info("FilesKeypad: ignored key code={}, value={}", code, value);
         }
 #endif
@@ -302,7 +310,7 @@ void FilesKeypad::pushKeyEvent(uint16_t code, int32_t value)
 
     const bool pressed = value == 1;
 #if !LV_USE_SDL && defined(__linux__)
-    if (inputDebugEnabled()) {
+    if (debug) {
         spdlog::info("FilesKeypad: key code={}, translated={}, utf8={}, pressed={}", code, key, debugKeyUtf8(key),
                      pressed);
     }

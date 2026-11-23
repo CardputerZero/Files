@@ -27,6 +27,7 @@ public:
     void poll();
     lv_indev_t* indev() const;
     void setKeyCallback(KeyCallback callback);
+    void setSensitiveInputCheck(std::function<bool()> check);
 
 private:
     struct KeyEvent {
@@ -46,6 +47,7 @@ private:
     std::vector<int> _event_fds;
     std::deque<KeyEvent> _pending_keys;
     KeyCallback _key_callback;
+    std::function<bool()> _sensitive_input_check;
     CardputerKeymap _cardputer_keymap;
     uint32_t _last_key        = 0;
     bool _left_shift_pressed  = false;
