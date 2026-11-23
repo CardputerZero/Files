@@ -6,6 +6,7 @@ File browser and preview app for M5Stack CardputerZero.
 
 - Browse folders with animated file menu and long-name scrolling
 - Copy, cut, paste, rename, delete, and inspect file metadata
+- Browse mounted removable drives and safely eject them from Places
 - Preview text files with CJK-capable Noto Sans fonts and scroll progress
 - Preview images with pan, zoom, counter-clockwise rotation, fullscreen, and GIF support
 - Play audio files with seek and 1x/2x/5x speed controls
@@ -133,6 +134,14 @@ Key controls:
 - Audio preview: `5` back 10s, `6` play/pause, `7` forward 10s, `8` speed, Esc/Left back
 - Video preview: Space pause/resume, Left/Right seek, Esc back
 
+On Linux, Files starts at **Places** if a removable drive is mounted. Places
+shows drives and their available space above Home and File system. You can
+reach it with **Esc** or **Tab → Places**. Hold **Esc** at Places to exit.
+When a drive appears while Files is open, press **Enter** during the notification
+to open it. To disconnect a drive, select it in Places and press **E**, or choose
+**Tab → Eject** from inside the drive, then confirm. Files uses `udisksctl` to
+unmount the drive and power off USB devices when safe.
+
 Video preview uses `ffmpeg` directly on CardputerZero. Audio is sent to the
 PulseAudio sink named by `FILES_VIDEO_PULSE_SINK`, or to `default` when unset.
 
@@ -159,3 +168,17 @@ The generated package is written to `dist/`:
 ```text
 dist/m5cardputerzero-files_1.0.4_m5stack1_arm64.deb
 ```
+
+## Tests
+
+```bash
+cmake -S . -B build/sdl -DFILES_USE_SDL=ON -DBUILD_TESTING=ON
+cmake --build build/sdl -j8
+ctest --test-dir build/sdl --output-on-failure
+sudo unshare --mount --propagation private ./tests/check_loop_mount.sh ./build/sdl/storage_package_tests
+```
+
+The loop test uses a temporary ext4 image by default. Pass `vfat` to run
+the same copy and disconnection checks on FAT. The storage hardening script
+uses a private mount namespace to cover cross-filesystem moves and errors.
+The SDL Escape test requires Xvfb, libXtst, and Pillow.

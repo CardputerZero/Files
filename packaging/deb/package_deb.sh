@@ -109,6 +109,7 @@ Priority: optional
 Architecture: ${DEB_ARCH}
 Maintainer: ${MAINTAINER}
 Depends: libc6, libstdc++6, libgcc-s1, ffmpeg
+Recommends: udisks2
 Installed-Size: ${INSTALLED_SIZE}
 Description: Files application for M5CardputerZero APPLaunch
  Files application and launcher entry.

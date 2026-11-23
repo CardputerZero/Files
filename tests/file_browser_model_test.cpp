@@ -68,6 +68,79 @@ void selectName(files::FileBrowserModel& model, const std::string& name)
     require(model.selectedIndex().get() == index, "failed to select requested test entry");
 }
 
+void testPlacesAndVolumeChanges()
+{
+    TemporaryTree tree;
+    const auto diskPath = tree.root / "Příručka";
+    const auto start = tree.root / "start" / "nested";
+    fs::create_directories(diskPath);
+    fs::create_directories(start);
+    const files::internal::RemovableVolume disk{
+        {101, "7:10", "/", diskPath, "/dev/loop10"}, "/dev/loop10", diskPath.filename().string()
+    };
+
+    files::FileBrowserModel startedWithDisk(start.string(), {disk});
+    require(startedWithDisk.inPlaces() && !startedWithDisk.canGoBack(), "start on Places when a disk is mounted");
+    const auto& places = startedWithDisk.entries().get();
+    require(places.size() == 3 && places[0].mountRoot && places[0].name == disk.name &&
+                places[0].freeBytes.has_value() && places[1].name == "Home" && places[2].name == "File system" &&
+                startedWithDisk.selectedIndex().get() == 0,
+            "Places must select the drive before Home and File system");
+    require(startedWithDisk.hasRemovableVolumes(), "a mounted drive must enable the USB shortcut");
+    const auto unchanged = startedWithDisk.updateVolumes({disk});
+    require(unchanged.arrived.empty() && unchanged.removed.empty(), "no notification for a disk present at startup");
+
+    files::FileBrowserModel startedWithoutDisk(start.string(), {});
+    startedWithoutDisk.refresh();
+    require(!startedWithoutDisk.hasRemovableVolumes() && !startedWithoutDisk.openRemovableVolumes(),
+            "USB shortcut without a drive must leave navigation alone");
+    require(startedWithoutDisk.currentDirectory().get() == start.string(), "retain the start folder without a disk");
+    const auto connected = startedWithoutDisk.updateVolumes({disk});
+    require(connected.arrived.size() == 1 && connected.arrived.front().mount.id == 101 &&
+                startedWithoutDisk.currentDirectory().get() == start.string(),
+            "hotplug exposes the new mount without interrupting the current folder");
+
+    while (startedWithoutDisk.canGoBack()) {
+        const auto before = fs::path(startedWithoutDisk.currentDirectory().get());
+        require(static_cast<bool>(startedWithoutDisk.goBack()), "Escape must reach Places");
+        if (!startedWithoutDisk.inPlaces()) {
+            require(startedWithoutDisk.currentDirectory().get() == before.parent_path(), "Escape must walk up one level");
+        }
+    }
+    require(startedWithoutDisk.inPlaces() && startedWithoutDisk.selectedEntry()->name == "File system",
+            "the file system root must return to Places");
+    require(!startedWithoutDisk.goBack(), "Places is the final navigation level");
+    require(static_cast<bool>(startedWithoutDisk.openSelected()) &&
+                startedWithoutDisk.currentDirectory().get() == "/" &&
+                static_cast<bool>(startedWithoutDisk.goBack()) && startedWithoutDisk.inPlaces(),
+            "opening the file system from Places must return there");
+
+    auto remounted = disk;
+    remounted.mount.id = 102;
+    const auto replaced = startedWithoutDisk.updateVolumes({remounted});
+    require(replaced.removed.size() == 1 && replaced.removed.front().mount.id == 101 &&
+                replaced.arrived.size() == 1 && replaced.arrived.front().mount.id == 102 &&
+                !startedWithoutDisk.volume(101) && !startedWithoutDisk.openVolume(101),
+            "a new mount at the same path must invalidate the original notification");
+    auto second = disk;
+    second.mount.id = 103;
+    second.mount.target = tree.root / "Druhý disk";
+    second.name = second.mount.target.filename().string();
+    fs::create_directory(second.mount.target);
+    files::FileBrowserModel multiple(start.string(), {disk, second});
+    selectName(multiple, "Home");
+    require(static_cast<bool>(multiple.openRemovableVolumes()) && multiple.inPlaces() &&
+                multiple.selectedEntry()->mountId == disk.mount.id, "multi-drive U should focus a drive in Places");
+    multiple.selectNext();
+    require(static_cast<bool>(multiple.openRemovableVolumes()) && multiple.selectedEntry()->mountId == second.mount.id,
+            "multi-drive U should preserve the selected drive");
+
+    const auto disconnected = startedWithoutDisk.updateVolumes({});
+    require(disconnected.removed.size() == 1 && disconnected.arrived.empty() &&
+                startedWithoutDisk.inPlaces() && indexOf(startedWithoutDisk, disk.name) < 0,
+            "removed drive must disappear from Places");
+}
+
 void testPaging()
 {
     TemporaryTree tree;
@@ -164,6 +237,22 @@ void testRelativeDirectoryAndFailedBack()
             "goBack did not return to the original directory after recovery");
 }
 
+void testDeleteSelectsNeighbor()
+{
+    TemporaryTree tree;
+    for (const auto* name : {"01.txt", "02.txt", "03.txt"}) {
+        writeFile(tree.root / name);
+    }
+    files::FileBrowserModel model(tree.root.string(), {});
+    selectName(model, "02.txt");
+    require(static_cast<bool>(model.deleteSelected()), "failed to delete middle entry");
+    require(model.selectedEntry() && model.selectedEntry()->name == "03.txt",
+            "deleting a middle entry did not select the following neighbor");
+    require(static_cast<bool>(model.deleteSelected()), "failed to delete last entry");
+    require(model.selectedEntry() && model.selectedEntry()->name == "01.txt",
+            "deleting the last entry did not select the preceding neighbor");
+}
+
 void testRefreshFailurePreservesListing()
 {
     TemporaryTree tree;
@@ -190,10 +279,12 @@ void testRefreshFailurePreservesListing()
 
 int main()
 {
+    testPlacesAndVolumeChanges();
     testPaging();
     testPreviewSelectionRestoration();
     testDirectorySelectionRestoration();
     testRelativeDirectoryAndFailedBack();
     testRefreshFailurePreservesListing();
+    testDeleteSelectsNeighbor();
     return 0;
 }
