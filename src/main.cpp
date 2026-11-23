@@ -1,14 +1,19 @@
 #include "core/files_app.hpp"
 #include "hal/files_lvgl_hal.hpp"
 #include "input/files_keypad.hpp"
+#include "models/debian_install.hpp"
+#include <cstring>
 #include <core/hal/hal.hpp>
 #include <lvgl.h>
 #include <spdlog/spdlog.h>
 #include <stdio.h>
 #include <unistd.h>
 
-int main()
+int main(int argc, char** argv)
 {
+    if (argc > 1 && std::strcmp(argv[1], files::internal::debHelperOption) == 0) {
+        return files::internal::runDebInstallHelper(argc, argv);
+    }
     constexpr int32_t kScreenWidth  = 320;
     constexpr int32_t kScreenHeight = 170;
 
@@ -36,6 +41,7 @@ int main()
         files::FilesKeypad keypad;
         keypad.setKeyCallback(
             [&app](uint32_t key, const char* utf8, bool pressed) { return app.onLvglKeyState(key, utf8, pressed); });
+        keypad.setSensitiveInputCheck([&app] { return app.sensitiveInputActive(); });
         keypad.openDefault();
 #endif
 

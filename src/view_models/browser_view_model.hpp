@@ -1,5 +1,8 @@
 #pragma once
 
+#include <atomic>
+#include "models/debian_package.hpp"
+
 #include "models/files_model.hpp"
 #include "view_models/view_model.hpp"
 #include <tools/observable/single_observable.hpp>
@@ -21,12 +24,13 @@ enum class BrowserAction {
     Eject,
 };
 
-enum class PackageDialogMode { Closed, Transferring, ConfirmEject, Ejecting, Result };
+enum class PackageDialogMode { Closed, Reading, Review, Password, Installing, Transferring, ConfirmEject, Ejecting, Result };
 
 struct PackageDialog {
     PackageDialogMode mode = PackageDialogMode::Closed;
     std::string title;
     std::string text;
+    bool allowInstall = false;
 };
 
 struct VolumeNotice {
@@ -119,6 +123,8 @@ public:
 
     auto& packageDialog() { return _package_dialog; }
     bool packageDialogOpen() const { return _package_dialog.get().mode != PackageDialogMode::Closed; }
+    bool packagePasswordActive() const { return _package_dialog.get().mode == PackageDialogMode::Password; }
+    void editPackagePassword(uint32_t key, const char* utf8);
     auto& packageScroll() { return _package_scroll; }
     const FileEntry* selectedEntry() const;
     bool canGoBack() const
@@ -155,6 +161,16 @@ private:
     PendingCopyFile _pending_copy;
     smooth_ui_toolkit::SingleObservable<PackageDialog> _package_dialog{PackageDialog{}};
     smooth_ui_toolkit::SingleObservable<int> _package_scroll{0};
+    std::unique_ptr<internal::PreparedDeb> _prepared_deb;
+    std::string _package_password;
+    int _password_attempts = 0;
+    uint64_t _package_source_mount_id = 0;
+    std::mutex _package_log_mutex;
+    std::string _package_log;
+    std::atomic<internal::DebInstallPhase> _package_phase{internal::DebInstallPhase::Preparing};
+    // The workers finish before the state they use is destroyed.
+    std::future<internal::DebInspection> _package_read;
+    std::future<internal::DebInstallResult> _package_install;
     std::shared_ptr<internal::TransferControl> _transfer_control;
     std::mutex _eject_mutex;
     std::string _eject_progress;
@@ -178,6 +194,10 @@ private:
 
     std::vector<BrowserAction> availableActions() const;
     void handlePackageKey(uint32_t key);
+    void startPackageRead(const FileEntry& entry);
+    void startPackageInstall();
+    void tickPackage(uint32_t nowMs);
+    const char* packageInstallStatus() const;
     void requestEject();
     void startEject();
     void showVolumeNotice(VolumeNotice notice);

@@ -1,4 +1,5 @@
 #include "views/browser_view.hpp"
+#include "core/files_language.hpp"
 
 #include "views/browser_text.hpp"
 
@@ -1338,6 +1339,19 @@ public:
         const char* hint = "";
         bool canScroll = false;
         switch (dialog.mode) {
+            case PackageDialogMode::Reading:
+                hint = "Checking package and APT plan...";
+                break;
+            case PackageDialogMode::Review:
+                hint = dialog.allowInstall ? "Enter Install · Esc Cancel" : "Esc Back";
+                canScroll = true;
+                break;
+            case PackageDialogMode::Password:
+                hint = "Enter Continue · Esc Cancel";
+                break;
+            case PackageDialogMode::Installing:
+                hint = local("Installation cannot be interrupted", "Instalaci nelze přerušit");
+                break;
             case PackageDialogMode::Transferring:
                 hint = "Esc Cancel";
                 break;

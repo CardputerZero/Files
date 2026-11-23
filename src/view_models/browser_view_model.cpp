@@ -1,4 +1,5 @@
 #include "view_models/browser_view_model.hpp"
+#include "core/files_language.hpp"
 
 #include <spdlog/spdlog.h>
 #include <algorithm>
@@ -25,6 +26,7 @@ BrowserViewModel::~BrowserViewModel()
     if (_transfer_control) {
         _transfer_control->cancel();
     }
+    internal::clearSecret(_package_password);
 }
 
 void BrowserViewModel::onEnter()
@@ -179,6 +181,10 @@ void BrowserViewModel::tick(uint32_t nowMs)
         tickStorage(nowMs);
         return;
     }
+    if (packageDialogOpen()) {
+        tickPackage(nowMs);
+        return;
+    }
     if (_pending_delete.get().active || _pending_rename.get().active) {
         clearHeldSelection();
         return;
@@ -220,7 +226,7 @@ bool BrowserViewModel::canOpenUsb() const
 {
     const auto mode = _package_dialog.get().mode;
     return hasRemovableVolumes() && !_pending_rename.get().active &&
-           (mode == PackageDialogMode::Closed ||
+           (mode == PackageDialogMode::Closed || mode == PackageDialogMode::Review ||
             mode == PackageDialogMode::Result || mode == PackageDialogMode::ConfirmEject);
 }
 
@@ -298,6 +304,12 @@ void BrowserViewModel::pollVolumes(uint32_t nowMs)
         for (const auto& drive : changes.removed) {
             const auto id = drive.mount.id;
             const auto mode = _package_dialog.get().mode;
+            if (id == _package_source_mount_id &&
+                (mode == PackageDialogMode::Review || mode == PackageDialogMode::Password)) {
+                _prepared_deb.reset();
+                internal::clearSecret(_package_password);
+                _package_dialog.set({PackageDialogMode::Result, "Debian package", "Drive disconnected"});
+            }
             if (_volume_notice.get().connectedMountId == id) {
                 advanceVolumeNotice();
             }
@@ -384,7 +396,9 @@ void BrowserViewModel::openSelected()
     }
 
     if (!openedFile.path.empty()) {
-        if (_model.preview().open(openedFile)) {
+        if (openedFile.extension == ".deb") {
+            startPackageRead(openedFile);
+        } else if (_model.preview().open(openedFile)) {
             _router.push(PageId::Preview);
         } else {
             _model.browser().status().set("No preview available");
@@ -731,6 +745,121 @@ void BrowserViewModel::tickStorage(uint32_t nowMs)
     }
 }
 
+void BrowserViewModel::startPackageRead(const FileEntry& entry)
+{
+    clearHeldSelection();
+    _password_attempts = 0;
+    _package_source_mount_id = entry.mountId;
+    _package_log = local("Reading package…", "Načítám balíček…");
+    _package_dialog.set({PackageDialogMode::Reading, local("Debian package", "Balíček Debian"), _package_log});
+    _package_read = std::async(std::launch::async, [this, path = entry.path, mountId = entry.mountId] {
+        return internal::inspectDeb(path, mountId, [this](const std::string& details) {
+            std::lock_guard<std::mutex> lock(_package_log_mutex);
+            _package_log = details;
+        });
+    });
+}
+
+const char* BrowserViewModel::packageInstallStatus() const
+{
+    using Phase = internal::DebInstallPhase;
+    switch (_package_phase.load()) {
+        case Phase::Authorizing: return local("Checking authorization…", "Ověřuji oprávnění…");
+        case Phase::Verifying: return local("Verifying the archive…", "Ověřuji archiv…");
+        case Phase::Downloading: return local("Downloading dependencies…", "Stahuji závislosti…");
+        case Phase::Installing: return local("Starting the package manager…", "Spouštím správce balíčků…");
+        case Phase::Unpacking: return local("Unpacking the package…", "Rozbaluji balíček…");
+        case Phase::Configuring: return local("Configuring the package…", "Nastavuji balíček…");
+        case Phase::Finishing: return local("Finishing installation…", "Dokončuji instalaci…");
+        case Phase::Preparing: return local("Preparing installation…", "Připravuji instalaci…");
+    }
+    return "";
+}
+
+void BrowserViewModel::startPackageInstall()
+{
+    if (!_prepared_deb) {
+        return;
+    }
+    _package_phase.store(internal::DebInstallPhase::Preparing);
+    std::string password;
+    password.swap(_package_password);
+    _package_dialog.set({PackageDialogMode::Installing, local("Installing package", "Instaluji balíček"),
+                         packageInstallStatus()});
+    _package_install = std::async(std::launch::async, [this, password = std::move(password)]() mutable {
+        return internal::installDeb(*_prepared_deb, password,
+            [](const std::string& chunk) { spdlog::debug("Debian installer: {}", internal::cleanCommandText(chunk)); },
+            [this](internal::DebInstallPhase phase) { _package_phase.store(phase); });
+    });
+}
+
+void BrowserViewModel::tickPackage(uint32_t nowMs)
+{
+    constexpr auto noWait = std::chrono::milliseconds(0);
+    try {
+        if (_package_read.valid() && _package_read.wait_for(noWait) == std::future_status::ready) {
+            auto inspection = _package_read.get();
+            if (!internal::volumePresent(_package_source_mount_id)) {
+                inspection = {nullptr, "Drive disconnected"};
+            }
+            _prepared_deb = std::move(inspection.package);
+            _package_dialog.set({_prepared_deb ? PackageDialogMode::Review : PackageDialogMode::Result, "Debian package",
+                                 std::move(inspection.text), inspection.installable});
+        }
+        if (_package_install.valid() && _package_install.wait_for(noWait) == std::future_status::ready) {
+            const auto result = _package_install.get();
+            using State = internal::DebInstallState;
+            if (result.state == State::PasswordRequired ||
+                (result.state == State::AuthenticationFailed && ++_password_attempts < 3)) {
+                _package_password.reserve(129);
+                const bool retry = result.state == State::AuthenticationFailed;
+                _package_dialog.set({PackageDialogMode::Password, "System password",
+                                     retry ? "Incorrect password. Try again.\n\n" : "Enter your sudo password.\n\n"});
+            } else {
+                _prepared_deb.reset();
+                _package_dialog.set({PackageDialogMode::Result,
+                                     result.state == State::Installed ? "Installation complete" : "Installation failed",
+                                     result.state == State::AuthenticationFailed ? "Sudo authentication failed"
+                                                                                : result.message});
+            }
+        }
+    } catch (const std::exception& error) {
+        _prepared_deb.reset();
+        _package_dialog.set({PackageDialogMode::Result, "Package operation failed", error.what()});
+    }
+
+    const auto mode = _package_dialog.get().mode;
+    if ((mode == PackageDialogMode::Reading || mode == PackageDialogMode::Installing) &&
+        nowMs - _last_package_update >= 125) {
+        _last_package_update = nowMs;
+        auto dialog = _package_dialog.get();
+        if (mode == PackageDialogMode::Reading) {
+            std::lock_guard<std::mutex> lock(_package_log_mutex);
+            dialog.text = _package_log;
+        } else {
+            dialog.text = packageInstallStatus();
+        }
+        if (dialog.text != _package_dialog.get().text) {
+            _package_dialog.set(std::move(dialog));
+        }
+    }
+}
+
+void BrowserViewModel::editPackagePassword(uint32_t key, const char* utf8)
+{
+    if (key == 8 && !_package_password.empty()) {
+        _package_password.back() = '\0';
+        _package_password.pop_back();
+    } else if (utf8 && utf8[0] >= ' ' && utf8[0] < 0x7f && utf8[1] == '\0' && _package_password.size() < 128) {
+        _package_password.push_back(utf8[0]);
+    } else {
+        return;
+    }
+    auto dialog = _package_dialog.get();
+    dialog.text = dialog.text.substr(0, dialog.text.find("\n\n") + 2) + std::string(_package_password.size(), '*');
+    _package_dialog.set(std::move(dialog));
+}
+
 void BrowserViewModel::handlePackageKey(uint32_t key)
 {
     const auto mode = _package_dialog.get().mode;
@@ -742,10 +871,13 @@ void BrowserViewModel::handlePackageKey(uint32_t key)
         }
         return;
     }
-    if (mode == PackageDialogMode::Ejecting) {
+    if (mode == PackageDialogMode::Reading || mode == PackageDialogMode::Installing ||
+        mode == PackageDialogMode::Ejecting) {
         return;
     }
-    if (key == '\x1b' || key == files_key::Left) {
+    if (key == '\x1b' || (key == files_key::Left && mode != PackageDialogMode::Password)) {
+        internal::clearSecret(_package_password);
+        _prepared_deb.reset();
         _eject_mount_id = 0;
         _package_dialog.set({});
         return;
@@ -753,13 +885,18 @@ void BrowserViewModel::handlePackageKey(uint32_t key)
     if (key == '\r' || key == '\n') {
         if (mode == PackageDialogMode::ConfirmEject) {
             startEject();
+        } else if ((mode == PackageDialogMode::Review && _package_dialog.get().allowInstall) ||
+            (mode == PackageDialogMode::Password && !_package_password.empty())) {
+            startPackageInstall();
         }
         return;
     }
-    if (key == files_key::Up || key == files_key::Down) {
-        _package_scroll.set(key == files_key::Up ? -18 : 18);
-    } else if (key == files_key::PageUp || key == files_key::PageDown) {
-        _package_scroll.set(key == files_key::PageUp ? -96 : 96);
+    if (mode != PackageDialogMode::Password) {
+        if (key == files_key::Up || key == files_key::Down) {
+            _package_scroll.set(key == files_key::Up ? -18 : 18);
+        } else if (key == files_key::PageUp || key == files_key::PageDown) {
+            _package_scroll.set(key == files_key::PageUp ? -96 : 96);
+        }
     }
 }
 

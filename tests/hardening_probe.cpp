@@ -1,4 +1,5 @@
 #include "models/command.hpp"
+#include "models/debian_package.hpp"
 #include "models/file_browser_model.hpp"
 #include "models/filesystem_transfer.hpp"
 
@@ -43,6 +44,53 @@ int main(int argc, char** argv)
         const auto elapsed = std::chrono::steady_clock::now() - start;
         std::cout << "elapsed(ms)=" << std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count() << '\n';
         return command && command.output == "complete" && elapsed < std::chrono::seconds(1) ? 0 : 1;
+    }
+    if (mode == "reject") {
+        const auto review = inspectDeb(argv[2]);
+        std::cout << review.text << '\n';
+        return !review.installable && !review.package && review.text.find(argv[3]) != std::string::npos ? 0 : 1;
+    }
+    if (mode == "symlink" || mode == "review" || mode == "install" || mode == "install-failure" ||
+        mode == "install-timeout" || mode == "changed") {
+        auto review = inspectDeb(argv[2]);
+        std::cout << review.text << '\n';
+        if (mode == "symlink") {
+            return review.installable ? 1 : 0;
+        }
+        if (mode == "review") {
+            return review.installable && review.text.find("scripts run as root") != std::string::npos &&
+                   review.text.find("Keep local configuration") != std::string::npos &&
+                   review.text.find("APT plan") != std::string::npos ? 0 : 1;
+        }
+        if (!review.installable || !review.package) {
+            return 2;
+        }
+        if (mode == "changed") {
+            std::error_code error;
+            fs::copy_file(argv[3], review.package->path, fs::copy_options::overwrite_existing, error);
+            // A sealed working copy may prevent the substitution altogether.
+            if (error) {
+                std::cout << "staged replacement rejected: " << error.message() << '\n';
+                return 0;
+            }
+        }
+        std::string password;
+        const auto result = installDeb(*review.package, password, [](const auto& output) { std::cout << output; });
+        std::cout << result.message << '\n';
+        if (mode == "changed") {
+            return result.state == DebInstallState::Failed && result.message.find("changed after review") !=
+                   std::string::npos ? 0 : 1;
+        }
+        if (mode == "install-timeout") {
+            return result.state == DebInstallState::Failed &&
+                   result.message.find("Package installation exceeded the time limit of 1 s") != std::string::npos &&
+                   result.message.find("dpkg --audit reported unfinished packages") != std::string::npos ? 0 : 1;
+        }
+        if (mode == "install-failure") {
+            return result.state == DebInstallState::Failed &&
+                   result.message.find("dpkg --audit reported unfinished packages") != std::string::npos ? 0 : 1;
+        }
+        return result.state == DebInstallState::Installed ? 0 : 1;
     }
     const fs::path source = argv[2];
     const fs::path destination = argv[3];

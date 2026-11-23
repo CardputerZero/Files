@@ -7,6 +7,7 @@ File browser and preview app for M5Stack CardputerZero.
 - Browse folders with animated file menu and long-name scrolling
 - Copy, cut, paste, rename, delete, and inspect file metadata
 - Browse mounted removable drives and safely eject them from Places
+- Review and install local Debian packages after confirmation
 - Preview text files with CJK-capable Noto Sans fonts and scroll progress
 - Preview images with pan, zoom, counter-clockwise rotation, fullscreen, and GIF support
 - Play audio files with seek and 1x/2x/5x speed controls
@@ -142,6 +143,23 @@ to open it. To disconnect a drive, select it in Places and press **E**, or choos
 **Tab → Eject** from inside the drive, then confirm. Files uses `udisksctl` to
 unmount the drive and power off USB devices when safe.
 
+Open a `.deb` with **Enter**, scroll the package details with **F/X** or the
+arrow keys, and press **Enter** to install the reviewed package. **Esc** cancels
+the review. Installing uses the normal Debian package manager with sudo
+authorization. Packages for other architectures cannot be confirmed unless that
+architecture is configured on the system. Installation progress follows the
+message locale (English or Czech). The review accepts archives up to
+64 MiB and checks available space in the `/var/tmp` directory before staging.
+
+Without Store, the package manager has a one-hour installation timeout by
+default. When the package manager returns, Files gives adopted children up
+to three seconds to finish while holding its transaction locks. Services
+started by package scripts can continue running. On failure after starting
+an installation, Files reports the path to
+its recovery record and protected archive. Review the output of `dpkg --audit` and the record
+before retrying. An administrator can remove the reported staging directory
+after resolving the package state.
+
 Video preview uses `ffmpeg` directly on CardputerZero. Audio is sent to the
 PulseAudio sink named by `FILES_VIDEO_PULSE_SINK`, or to `default` when unset.
 
@@ -181,4 +199,6 @@ sudo unshare --mount --propagation private ./tests/check_loop_mount.sh ./build/s
 The loop test uses a temporary ext4 image by default. Pass `vfat` to run
 the same copy and disconnection checks on FAT. The storage hardening script
 uses a private mount namespace to cover cross-filesystem moves and errors.
-The SDL Escape test requires Xvfb, libXtst, and Pillow.
+The SDL Escape test requires Xvfb, libXtst, and Pillow. The package tests
+build local fixtures and simulate unsatisfied dependencies. The hardening
+script also takes the SDL executable as its second argument.

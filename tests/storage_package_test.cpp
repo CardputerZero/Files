@@ -1,3 +1,4 @@
+#include "models/debian_package.hpp"
 #include "models/removable_volumes.hpp"
 #include "models/file_browser_model.hpp"
 #include "models/filesystem_transfer.hpp"
@@ -86,6 +87,116 @@ void testMountList(const fs::path& temp)
     check(volumeContains(usb, "/media/pi/Žluté USB/folder/item"), "child was not recognized");
     check(!volumeContains(usb, "/media/pi/Žluté USB2/file"), "similar prefix matched another drive");
     check(!volumes[1].powerOff && !volumes[2].powerOff, "SD and loop devices should only be unmounted");
+}
+
+fs::path buildDeb(const fs::path& base, const std::string& arch, const std::string& depends = {},
+                  const char* script = nullptr)
+{
+    fs::create_directories(base / "DEBIAN");
+    const auto docs = base / "usr/share/doc/cz-zkouska-files";
+    fs::create_directories(docs);
+    std::ofstream(docs / "zkouska.txt") << "Files test\n";
+    std::ofstream control(base / "DEBIAN/control");
+    control << "Package: cz-zkouska-files\nVersion: 1.0.0\nArchitecture: " << arch
+            << "\nMaintainer: Files Test <files-test@example.invalid>\n";
+    if (!depends.empty()) {
+        control << "Depends: " << depends << '\n';
+    }
+    control << "Description: Files test package\n extra text\n .\n after a blank line\n";
+    control.close();
+    if (script) {
+        const auto path = base / "DEBIAN" / script;
+        std::ofstream(path) << "#!/bin/sh\nexit 0\n";
+        fs::permissions(path, fs::perms::owner_exec | fs::perms::group_exec | fs::perms::others_exec,
+                        fs::perm_options::add);
+    }
+    const auto deb = base.string() + " ; zkouška.deb";
+    const auto build = runCommand({"/usr/bin/dpkg-deb", "--build", "--root-owner-group", base.string(), deb});
+    check(static_cast<bool>(build), build.output.c_str());
+    return deb;
+}
+
+void testDeb(const fs::path& temp)
+{
+    const auto parsed = parseDebInfo(" new Debian package, version 2.0.\n"
+                                     " Package: cz-zkouska-files\n Version: 1:0~1\n Architecture: all\n"
+                                     " Depends: foo (>= 1),\n  bar | baz\n Pre-Depends: quux\n"
+                                     " Description: Summary: with colon\n  details\n  .\n  last");
+    check(parsed.version == "1:0~1" && parsed.name == "cz-zkouska-files" && parsed.architecture == "all",
+          "package identity fields must be parsed");
+    check(parsed.depends == "foo (>= 1), bar | baz" && parsed.preDepends == "quux",
+          "dependency fields and continuation lines must be parsed");
+    check(parsed.description == "Summary: with colon\ndetails\n\nlast", "description lost formatting");
+
+    std::error_code error;
+    if (!fs::exists("/usr/bin/dpkg-deb", error) || !fs::exists("/usr/bin/apt-get", error)) {
+        std::cout << "dpkg-deb or apt-get is unavailable; only the metadata parser was exercised\n";
+        return;
+    }
+    const auto oversized = temp / "oversized.deb";
+    std::ofstream(oversized).close();
+    fs::resize_file(oversized, 2ULL * 1024 * 1024 * 1024);
+    const auto rejectedLarge = inspectDeb(oversized);
+    check(!rejectedLarge.installable && !rejectedLarge.package &&
+              rejectedLarge.text.find("64 MiB review limit") != std::string::npos,
+          rejectedLarge.text.c_str());
+
+    const auto path = buildDeb(temp / "valid", "all");
+    fs::path staged;
+    {
+        std::string earlyDetails;
+        auto review = inspectDeb(path, 0, [&](const std::string& details) { earlyDetails = details; });
+        check(earlyDetails.find("Depends: None") != std::string::npos &&
+                  earlyDetails.find("extra text") != std::string::npos,
+              "package metadata must be available before the install plan");
+        check(review.installable && review.package != nullptr, review.text.c_str());
+        check(review.text.find("Install scripts run as root") == std::string::npos,
+              "package without scripts should not show the package script warning");
+        check(review.text.find("Depends: None") != std::string::npos &&
+                  review.text.find("extra text\n\nafter a blank line") != std::string::npos,
+              "package review is missing metadata");
+        staged = review.package->path;
+        check(fs::is_regular_file(staged) && fs::file_size(path) == fs::file_size(staged), "staging failed");
+        std::ofstream(path, std::ios::trunc) << "replaced after review";
+        check(fs::file_size(staged) > fs::file_size(path), "review did not pin the staged bytes");
+    }
+    check(!fs::exists(staged.parent_path()), "cancelling review must remove the staged package");
+
+    const auto withScript = buildDeb(temp / "scripts", "all", {}, "postinst");
+    std::string reading;
+    const auto scripted = inspectDeb(withScript, 0, [&](const auto& details) { reading = details; });
+    constexpr auto warning = "Package: cz-zkouska-files\nInstall scripts run as root\n";
+    check(scripted.installable && scripted.text.rfind(warning, 0) == 0 && reading.rfind(warning, 0) == 0,
+          scripted.text.c_str());
+
+    const auto invalid = inspectDeb(path);
+    check(!invalid.installable && invalid.text.find("Invalid or unreadable") != std::string::npos,
+          "corrupt package was not rejected");
+
+    const auto wrong = buildDeb(temp / "wrong", "files-no-such-architecture");
+    const auto unsupported = inspectDeb(wrong);
+    check(!unsupported.installable && unsupported.package &&
+              unsupported.text.find("Unsupported architecture") != std::string::npos,
+          "wrong architecture should remain visible with install disabled");
+
+    const auto valid = buildDeb(temp / "truncated", "all");
+    fs::resize_file(valid, fs::file_size(valid) - 64);
+    const auto damaged = inspectDeb(valid);
+    check(!damaged.installable && damaged.text.find("Damaged Debian package") != std::string::npos,
+          "valid control archive with truncated data should be rejected");
+
+    const auto unsatisfied = buildDeb(temp / "dependencies", "all", "cz-files-nonexistent-dependency (= 99999999)");
+    const auto missing = inspectDeb(unsatisfied);
+    check(!missing.installable && missing.package &&
+              missing.text.find("cz-files-nonexistent-dependency") != std::string::npos, missing.text.c_str());
+    std::string emptyPassword;
+    bool attemptedAuth = false;
+    const auto rejected = installDeb(*missing.package, emptyPassword, [&](const auto& message) {
+        attemptedAuth |= message.find("sudo authorization") != std::string::npos;
+    });
+    check(rejected.state == DebInstallState::Failed && !attemptedAuth &&
+              rejected.message.find("cz-files-nonexistent-dependency") != std::string::npos,
+          rejected.message.c_str());
 }
 
 void selectByName(FileBrowserModel& browser, const std::string& name)
@@ -209,6 +320,7 @@ int main(int argc, char** argv)
             testLoop(argv[1], temp.path);
         } else {
             testMountList(temp.path);
+            testDeb(temp.path);
         }
         return 0;
     } catch (const std::exception& error) {

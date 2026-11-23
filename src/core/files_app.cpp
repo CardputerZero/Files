@@ -217,7 +217,7 @@ bool FilesApp::onLvglKeyState(uint32_t lv_key, const char* utf8, bool pressed)
     const bool storage_key = utf8 && (utf8[0] == 'u' || utf8[0] == 'U' || utf8[0] == 'e' || utf8[0] == 'E');
     bool desktop_help = false;
 #if LV_USE_SDL
-    desktop_help = (lv_key == 'h' || lv_key == 'H') && !textInputFocused();
+    desktop_help = (lv_key == 'h' || lv_key == 'H') && !textInputFocused() && !sensitiveInputActive();
 #endif
     if (lv_key == files_key::Help || desktop_help) {
         if (pressed) {
@@ -345,6 +345,13 @@ bool FilesApp::onLvglKeyState(uint32_t lv_key, const char* utf8, bool pressed)
             }
 #endif
             onKey('\t');
+        }
+        return true;
+    }
+
+    if (_router.page() == PageId::Browser && _browser_vm.packagePasswordActive()) {
+        if (pressed) {
+            _browser_vm.editPackagePassword(lv_key == LV_KEY_BACKSPACE ? 8 : lv_key, utf8);
         }
         return true;
     }
@@ -507,6 +514,7 @@ void FilesApp::showHelpPage()
                                        "F↑ X↓: move. Enter: open. Esc: back.\n"
                                        "Tab: menu. U: open USB or choose a drive in Places.\n"
                                        "E: eject the selected drive in Places or the current drive.\n"
+                                       "Enter on a .deb shows details. Enter again installs.\n"
                                        "PgUp / PgDn: page");
     if (!_help_page) {
         spdlog::error("FilesApp: failed to create help page");
