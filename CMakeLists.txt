@@ -320,4 +320,14 @@ if(BUILD_TESTING)
         "${FILES_SRC_DIR}"
     )
     add_test(NAME audio_playback_gain COMMAND audio_playback_gain_tests)
+
+    add_executable(desktop_entry_tests
+        tests/desktop_entry_test.cpp
+        src/models/file_type_registry.cpp
+        src/preview/external/desktop_entry.cpp
+    )
+    target_include_directories(desktop_entry_tests PRIVATE
+        "${FILES_SRC_DIR}"
+    )
+    add_test(NAME desktop_entry COMMAND desktop_entry_tests)
 endif()

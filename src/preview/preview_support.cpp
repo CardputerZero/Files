@@ -1,6 +1,7 @@
 #include "preview/preview_support.hpp"
 
 #include "preview/audio/audio_preview.hpp"
+#include "preview/external/external_preview.hpp"
 #include "preview/image/image_preview.hpp"
 #include "preview/info/info_preview.hpp"
 #include "preview/text/text_preview.hpp"
@@ -64,6 +65,8 @@ bool isRegularPreviewFile(const FileEntry& file)
 
 PreviewRegistry::PreviewRegistry()
 {
+    // Installed apps that declare a file type come first (see external_preview.hpp).
+    add(createExternalPreviewSupport());
     add(createVideoPreviewSupport());
     add(createImagePreviewSupport());
     add(createAudioPreviewSupport());

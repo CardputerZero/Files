@@ -39,6 +39,10 @@ public:
     {
         return false;
     }
+    virtual bool capturesInput() const
+    {
+        return false;
+    }
 
 protected:
     FilesRouter& _router;
