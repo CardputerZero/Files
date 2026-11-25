@@ -10,6 +10,7 @@ File browser and preview app for M5Stack CardputerZero.
 - Preview images with pan, zoom, counter-clockwise rotation, fullscreen, and GIF support
 - Play audio files with seek and 1x/2x/5x speed controls
 - Play video files fullscreen through `ffmpeg` on the device framebuffer
+- Open files in other installed APPLaunch apps that declare the file type
 - Fall back to an info preview for unsupported file types
 
 ## Dependencies
@@ -121,6 +122,27 @@ Key controls:
 
 Video preview uses `ffmpeg` directly on CardputerZero. Audio is sent to the
 PulseAudio sink named by `FILES_VIDEO_PULSE_SINK`, or to `default` when unset.
+
+An installed APPLaunch app can take over a file type by declaring it in its
+`.desktop` entry under `/usr/share/APPLaunch/applications`:
+
+```ini
+[Desktop Entry]
+Name=PDF Viewer
+Exec=bin/czpdf
+MimeType=application/pdf;
+```
+
+- `MimeType=` covers common document types (PDF, XPS, EPUB, FB2, MOBI, CBZ,
+  DjVu, Office and OpenDocument files).
+- `X-Files-Extensions=.pdf;.xps;` claims extensions directly, including types
+  Files previews itself.
+- The file path is appended to `Exec`, or replaces `%f`/`%F`/`%u`/`%U`. A
+  relative `Exec` is resolved against `/usr/share/APPLaunch`.
+- Files stops drawing and ignores the keyboard until the app exits, then
+  returns to the file list. The app sees `FILES_OPENED_FROM=1`.
+- The folder is read each time a file is opened. `FILES_APPLICATIONS_DIR`
+  points it somewhere else for testing.
 
 Keyboard input debug logs can be enabled with:
 

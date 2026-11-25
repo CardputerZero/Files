@@ -20,6 +20,7 @@ public:
     void onKeyState(uint32_t key, bool pressed) override;
     void tick(uint32_t nowMs) override;
     bool suspendsHostRendering() const override;
+    bool capturesInput() const override;
 
     smooth_ui_toolkit::SingleObservable<PreviewPage*>& page()
     {

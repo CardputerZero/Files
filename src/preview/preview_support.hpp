@@ -40,6 +40,11 @@ public:
     {
         return false;
     }
+    // True while another program owns the keyboard (Files ignores keys then).
+    virtual bool capturesInput() const
+    {
+        return false;
+    }
 };
 
 class PreviewSupport {

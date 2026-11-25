@@ -196,6 +196,14 @@ void FilesApp::onLvglKey(uint32_t lv_key, const char* utf8)
 
 bool FilesApp::onLvglKeyState(uint32_t lv_key, const char* utf8, bool pressed)
 {
+    // An app opened from the file list is reading the same keyboard.
+    if (_current_vm && _current_vm->capturesInput()) {
+        _esc_pressed    = false;
+        _esc_exit_armed = false;
+        _enter_pressed  = false;
+        return true;
+    }
+
     bool desktop_help = false;
 #if LV_USE_SDL
     desktop_help = (lv_key == 'h' || lv_key == 'H') && !textInputFocused();

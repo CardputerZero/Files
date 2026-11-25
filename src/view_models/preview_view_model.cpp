@@ -44,4 +44,10 @@ bool PreviewViewModel::suspendsHostRendering() const
     return page && page->suspendsHostRendering();
 }
 
+bool PreviewViewModel::capturesInput() const
+{
+    PreviewPage* page = _model.preview().page().get();
+    return page && page->capturesInput();
+}
+
 }  // namespace files
